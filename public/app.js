@@ -1,16 +1,42 @@
 (function () {
   var $ = function (id) { return document.getElementById(id); };
-  var state = { agents: [], outputs: [], commits: [], filter: null, kind: 'All', sel: null };
+  var RELAY = ['scout', 'compass', 'forge', 'echo', 'sentry', 'warden', 'herald'];
+  var ON_DEMAND = ['scribe', 'custodian'];
+  var state = { agents: [], outputs: [], commits: [], agent: null, kind: 'All', sel: null };
+  var rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+  var dtf = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
   function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
   function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
   function ago(ms) {
-    var s = Math.max(0, (Date.now() - ms) / 1000);
-    if (s < 60) return 'just now';
-    if (s < 3600) return Math.floor(s / 60) + 'm ago';
-    if (s < 86400) return Math.floor(s / 3600) + 'h ago';
-    return Math.floor(s / 86400) + 'd ago';
+    var s = (ms - Date.now()) / 1000, a = Math.abs(s);
+    if (a < 60) return 'just now';
+    if (a < 3600) return rtf.format(Math.round(s / 60), 'minute');
+    if (a < 86400) return rtf.format(Math.round(s / 3600), 'hour');
+    return rtf.format(Math.round(s / 86400), 'day');
   }
+  function when(str) { var t = Date.parse(str); return isNaN(t) ? str : dtf.format(t); }
+
+  // Hash holds the view state so a reload or a shared link lands in the same place: #a=forge&k=Plans&f=plans/x.md
+  function writeHash() {
+    var p = new URLSearchParams();
+    if (state.agent) p.set('a', state.agent);
+    if (state.kind !== 'All') p.set('k', state.kind);
+    if (state.sel) p.set('f', state.sel);
+    history.replaceState(null, '', p.toString() ? '#' + p.toString() : location.pathname);
+  }
+  function readHash() {
+    var p = new URLSearchParams(location.hash.slice(1));
+    state.agent = p.get('a'); state.kind = p.get('k') || 'All'; state.sel = p.get('f');
+  }
+
+  var ICONS = {
+    idle: '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2.5 2.2"/></svg>',
+    running: '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".25"/><path class="spin" d="M8 2a6 6 0 0 1 6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+    done: '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="currentColor"/><path d="M5 8.2l2 2 4-4.2" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    blocked: '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.2 8h5.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
+    failed: '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="currentColor"/><path d="M5.6 5.6l4.8 4.8M10.4 5.6l-4.8 4.8" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/></svg>'
+  };
 
   // Small markdown renderer. Input is escaped first, so only the tags produced here reach the DOM.
   function inline(t) {
@@ -62,89 +88,112 @@
     return out.join('\n');
   }
 
+  function byName(n) { return state.agents.filter(function (a) { return a.name === n; })[0] || { name: n, state: 'idle' }; }
+  function setAgent(n) { state.agent = state.agent === n ? null : n; writeHash(); renderRelay(); renderAgents(); renderOutputs(); }
+
   function renderTally() {
     var c = { running: 0, blocked: 0, failed: 0, done: 0 };
     state.agents.forEach(function (a) { if (c[a.state] != null) c[a.state]++; });
     var t = $('tally'); t.textContent = '';
     Object.keys(c).forEach(function (k) {
-      var s = el('span'); var b = el('b', null, String(c[k])); s.appendChild(b); s.appendChild(document.createTextNode(' ' + k)); t.appendChild(s);
+      var s = el('span', k); s.appendChild(el('i')); s.appendChild(el('b', null, String(c[k]))); s.appendChild(document.createTextNode(k)); t.appendChild(s);
     });
   }
 
-  function renderRail() {
-    var rail = $('rail'); rail.textContent = '';
-    state.agents.forEach(function (a) {
-      var c = el('button', 'card' + (state.filter === a.name ? ' sel' : ''));
-      c.type = 'button'; c.dataset.state = a.state;
-      var n = el('div', 'nm', a.name); n.appendChild(el('small', null, a.role));
-      c.appendChild(n); c.appendChild(el('span', 'pill', a.state));
-      if (a.task && a.task !== '-') c.appendChild(el('p', 'task', a.task));
-      if (a.step && a.step !== '-') c.appendChild(el('p', null, a.step));
-      var meta = [];
-      if (a.updated && a.updated !== '-') meta.push('updated ' + a.updated);
-      if (a.missions) meta.push(a.missions + ' mission' + (a.missions > 1 ? 's' : ''));
-      if (meta.length) c.appendChild(el('p', 'meta', meta.join(' · ')));
-      c.addEventListener('click', function () { state.filter = state.filter === a.name ? null : a.name; renderRail(); renderList(); });
-      rail.appendChild(c);
+  function node(n) {
+    var a = byName(n), b = el('button', 'node'); b.type = 'button'; b.dataset.state = a.state;
+    b.setAttribute('aria-pressed', state.agent === n ? 'true' : 'false');
+    b.appendChild(el('span', 'dot')); var s = el('span', null, n); s.setAttribute('translate', 'no'); b.appendChild(s);
+    b.title = a.state; b.addEventListener('click', function () { setAgent(n); });
+    return b;
+  }
+  function renderRelay() {
+    var r = $('relay'); r.textContent = '';
+    r.appendChild(el('span', 'lbl', 'Relay'));
+    RELAY.forEach(function (n, i) { if (i) r.appendChild(el('span', 'sep', '›')); r.appendChild(node(n)); });
+    r.appendChild(el('span', 'gap'));
+    r.appendChild(el('span', 'lbl', 'On demand'));
+    ON_DEMAND.forEach(function (n) { r.appendChild(node(n)); });
+  }
+
+  function renderAgents() {
+    var a = $('agents'); a.textContent = '';
+    a.appendChild(el('h2', null, 'Agents'));
+    state.agents.forEach(function (g) {
+      var b = el('button', 'row'); b.type = 'button'; b.dataset.state = g.state;
+      b.setAttribute('aria-pressed', state.agent === g.name ? 'true' : 'false');
+      var ico = el('span', 'ico'); ico.innerHTML = ICONS[g.state] || ICONS.idle; b.appendChild(ico);
+      var nm = el('span', 'nm'); nm.appendChild(el('span', null, g.name)); nm.firstChild.setAttribute('translate', 'no'); nm.appendChild(el('small', null, g.role)); b.appendChild(nm);
+      b.appendChild(el('span', 'when', g.missions ? g.missions + (g.missions > 1 ? ' missions' : ' mission') : ''));
+      if (g.task && g.task !== '-') b.appendChild(el('span', 'task', g.task));
+      var step = [g.step && g.step !== '-' ? g.step : '', g.updated && g.updated !== '-' ? when(g.updated) : ''].filter(Boolean).join(' · ');
+      if (step) b.appendChild(el('span', 'step', step));
+      b.addEventListener('click', function () { setAgent(g.name); });
+      a.appendChild(b);
     });
-    var cm = el('div', 'commits'); cm.appendChild(el('div', 'sec', 'Recent commits'));
+    var cm = el('div', 'commits'); cm.appendChild(el('h2', null, 'Recent commits'));
     state.commits.forEach(function (g) {
-      var d = el('div'); var b = el('b', null, g.hash); d.appendChild(b); d.appendChild(document.createTextNode(' ' + g.subject + ' (' + g.when + ')')); cm.appendChild(d);
+      var d = el('div', 'commit'); d.appendChild(el('code', null, g.hash)); d.appendChild(el('span', null, g.subject)); d.title = g.subject + ' · ' + g.when; cm.appendChild(d);
     });
-    rail.appendChild(cm);
+    a.appendChild(cm);
   }
 
-  function renderList() {
-    var list = $('list'); list.textContent = '';
+  function renderOutputs() {
+    var o = $('outputs'); o.textContent = '';
     var kinds = ['All'];
-    state.outputs.forEach(function (o) { if (kinds.indexOf(o.kind) < 0) kinds.push(o.kind); });
-    var f = el('div', 'filters');
+    state.outputs.forEach(function (x) { if (kinds.indexOf(x.kind) < 0) kinds.push(x.kind); });
+    var f = el('div', 'chips');
     kinds.forEach(function (k) {
-      var b = el('button', 'chip' + (state.kind === k ? ' on' : ''), k); b.type = 'button';
-      b.addEventListener('click', function () { state.kind = k; renderList(); }); f.appendChild(b);
+      var b = el('button', 'chip', k); b.type = 'button'; b.setAttribute('aria-pressed', state.kind === k ? 'true' : 'false');
+      b.addEventListener('click', function () { state.kind = k; writeHash(); renderOutputs(); }); f.appendChild(b);
     });
-    list.appendChild(f);
-    if (state.filter) list.appendChild(el('div', 'sec', 'Showing ' + state.filter));
-    var shown = state.outputs.filter(function (o) {
-      return (!state.filter || o.agent === state.filter) && (state.kind === 'All' || o.kind === state.kind);
-    });
-    if (!shown.length) list.appendChild(el('div', 'empty', 'No outputs match yet.'));
-    shown.forEach(function (o) {
-      var b = el('button', 'item' + (state.sel === o.id ? ' sel' : '')); b.type = 'button';
-      b.appendChild(el('b', null, o.name)); b.appendChild(el('span', null, o.kind + ' · ' + ago(o.mtime)));
-      b.addEventListener('click', function () { open(o.id); }); list.appendChild(b);
+    o.appendChild(f);
+    if (state.agent) { var n = el('div', 'note', 'Filtered to ' + state.agent + '. Select it again to clear.'); o.appendChild(n); }
+    var shown = state.outputs.filter(function (x) { return (!state.agent || x.agent === state.agent) && (state.kind === 'All' || x.kind === state.kind); });
+    if (!shown.length) o.appendChild(el('div', 'empty', state.agent ? state.agent + ' has not produced any outputs yet.' : 'No outputs yet.'));
+    shown.forEach(function (x) {
+      var b = el('button', 'item'); b.type = 'button'; if (state.sel === x.id) b.setAttribute('aria-current', 'true');
+      b.appendChild(el('b', null, x.name));
+      var s = el('small'); s.appendChild(el('em', null, x.kind)); s.appendChild(el('span', null, ago(x.mtime))); b.appendChild(s);
+      b.addEventListener('click', function () { state.sel = x.id; writeHash(); renderOutputs(); openFile(x.id); }); o.appendChild(b);
     });
   }
 
-  function open(id, quiet) {
-    state.sel = id; if (!quiet) location.hash = encodeURIComponent(id);
+  function openFile(id) {
     fetch('/api/file?id=' + encodeURIComponent(id)).then(function (r) { return r.json(); }).then(function (d) {
-      var v = $('viewer'); v.textContent = '';
-      if (d.error) { v.appendChild(el('div', 'empty', 'That file is no longer there.')); return; }
-      v.appendChild(el('div', 'path', id));
+      var v = $('viewer'), keep = v.scrollTop; v.textContent = '';
+      if (d.error) { var w = el('div', 'welcome'); w.appendChild(el('h2', null, 'That file is gone')); w.appendChild(el('p', null, 'It was moved or deleted. Pick another output from the list.')); v.appendChild(w); return; }
+      var meta = state.outputs.filter(function (x) { return x.id === id; })[0] || {};
+      var h = el('div', 'vhead'); h.appendChild(el('h2', null, meta.name || id));
+      var m = el('div', 'vmeta');
+      if (meta.kind) m.appendChild(el('span', 'badge', meta.kind));
+      if (meta.agent) m.appendChild(el('span', null, 'by ' + meta.agent));
+      m.appendChild(el('span', null, 'Updated ' + dtf.format(d.mtime)));
+      var cp = el('button', 'copy', 'Copy path'); cp.type = 'button';
+      cp.addEventListener('click', function () {
+        var done = function () { cp.textContent = 'Copied'; setTimeout(function () { cp.textContent = 'Copy path'; }, 1500); };
+        try { navigator.clipboard.writeText(id).then(done, function () {}); } catch (e) {}
+      });
+      m.appendChild(cp); h.appendChild(m); v.appendChild(h);
       var doc = el('article', 'doc'); doc.innerHTML = md(d.text); v.appendChild(doc);
-      renderList();
+      v.scrollTop = keep;
     });
   }
 
   function load() {
     return fetch('/api/state').then(function (r) { return r.json(); }).then(function (d) {
       state.agents = d.agents; state.outputs = d.outputs; state.commits = d.commits;
-      renderTally(); renderRail(); renderList();
-      if (state.sel) open(state.sel, true);
+      renderTally(); renderRelay(); renderAgents(); renderOutputs();
+      if (state.sel) openFile(state.sel);
     });
   }
 
-  function live(on) {
-    var e = $('live'); e.className = 'live' + (on ? ' on' : '');
-    e.lastChild.textContent = on ? 'live' : 'reconnecting';
-  }
+  function live(on) { var e = $('live'); e.className = 'live' + (on ? ' on' : ''); e.lastChild.textContent = on ? 'Live' : 'Reconnecting…'; }
   var es = new EventSource('/api/events');
   es.onopen = function () { live(true); };
   es.onerror = function () { live(false); };
   es.onmessage = function () { load(); };
 
-  var h = decodeURIComponent(location.hash.slice(1));
-  if (h) state.sel = h;
+  readHash();
   load();
 })();
