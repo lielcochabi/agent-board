@@ -83,6 +83,8 @@ function walk(dir, base = '') {
   }
   return files;
 }
+const EMBLEMS = ['scout', 'compass', 'forge', 'echo', 'sentry', 'warden', 'herald', 'scribe', 'custodian', 'orb'];
+const agentType = tools => /\bEdit\b/.test(tools || '') ? 'Builder' : /WebSearch|WebFetch/.test(tools || '') ? 'Researcher' : 'Reviewer';
 function readAgents(p) {
   let names = [];
   try { names = fs.readdirSync(agentsDir(p)).filter(f => f.endsWith('.md')); } catch {}
@@ -91,11 +93,15 @@ function readAgents(p) {
   const agents = names.map(f => {
     const fm = parseFrontmatter(fs.readFileSync(path.join(agentsDir(p), f), 'utf8'));
     const name = fm.name || f.replace(/\.md$/, '');
-    let s = {};
-    try { s = parseStatus(fs.readFileSync(path.join(statusDir(p), `${name}.md`), 'utf8')); } catch {}
-    const role = (fm.description || '').split('.')[0].slice(0, 32);
-    return { name, role, state: (s.state || 'idle').toLowerCase(), task: s.task || '', step: s.step || '',
-             updated: s.updated || '', output: s.output || '',
+    let s = {}, mt = 0;
+    const statusFile = path.join(statusDir(p), `${name}.md`);
+    try { s = parseStatus(fs.readFileSync(statusFile, 'utf8')); mt = fs.statSync(statusFile).mtimeMs; } catch {}
+    const parsed = Date.parse(s.updated), meta = (p.meta || {})[name] || {};
+    const role = (fm.description || '').split('.')[0].slice(0, 60);
+    const dash = v => (v && v !== '-' ? v : '');
+    return { name, role, emblem: meta.emblem || (EMBLEMS.includes(name) ? name : 'orb'), type: meta.type || agentType(fm.tools),
+             state: (s.state || 'idle').toLowerCase(), task: dash(s.task), step: dash(s.step),
+             updated: mt || (isNaN(parsed) ? 0 : parsed), output: dash(s.output),
              missions: missionFiles.filter(m => m.toLowerCase().startsWith(name + '-')).length };
   });
   const rank = n => { const i = p.order.indexOf(n); return i < 0 ? 999 : i; };
@@ -134,18 +140,22 @@ function resolveFile(id) {
   const full = path.resolve(r.dir, rel);
   return full.startsWith(path.resolve(r.dir) + path.sep) ? full : null;
 }
-function gitLog(p, cb) {
-  execFile('git', ['log', '--pretty=format:%h\t%an\t%ar\t%s', '-20'], { cwd: p.repo || p.root, timeout: 4000 }, (err, out) => {
+function gitLog(p, names, cb) {
+  execFile('git', ['log', '--pretty=format:%h\t%an\t%at\t%s', '-20'], { cwd: p.repo || p.root, timeout: 4000 }, (err, out) => {
     if (err) return cb([]);
-    cb(out.split('\n').filter(Boolean).map(l => { const [hash, author, when, subject] = l.split('\t'); return { hash, author, when, subject }; }));
+    cb(out.split('\n').filter(Boolean).map(l => {
+      const [hash, author, at, subject] = l.split('\t');
+      const m = subject.match(/^([A-Za-z-]+):/), tag = m && m[1].toLowerCase();
+      return { hash, message: subject, agent: names.includes(tag) ? tag : author, time: Number(at) * 1000 };
+    }));
   });
 }
 
 // ---------- creating ----------
 const PRESETS = {
-  researcher: 'Read, Grep, Glob, Bash, Write, WebSearch, WebFetch',
-  reviewer: 'Read, Grep, Glob, Bash, Write',
-  builder: 'Read, Grep, Glob, Bash, Write, Edit',
+  Researcher: 'Read, Grep, Glob, Bash, Write, WebSearch, WebFetch',
+  Reviewer: 'Read, Grep, Glob, Bash, Write',
+  Builder: 'Read, Grep, Glob, Bash, Write, Edit',
 };
 const RESERVED = ['claude', 'explore', 'plan', 'general-purpose', 'statusline-setup', 'claude-code-guide'];
 const clean = (s, max) => String(s == null ? '' : s).replace(/[\r\n\t]+/g, ' ').trim().slice(0, max);
@@ -157,13 +167,14 @@ function createAgent(b) {
   const name = clean(b.name, 40);
   if (!/^[a-z][a-z0-9-]{1,29}$/.test(name)) return { error: 'Name must be 2 to 30 characters: lowercase letters, numbers and dashes, starting with a letter.' };
   if (RESERVED.includes(name)) return { error: `"${name}" is a built-in Claude Code agent name. Pick another.` };
-  const role = clean(b.role, 40), description = clean(b.description, 300);
+  const role = clean(b.role, 80);
   if (role.length < 2) return { error: 'Add a short role, for example "Test writer".' };
-  if (description.length < 5) return { error: 'Say when this agent should be used.' };
-  const preset = PRESETS[b.preset];
+  const preset = PRESETS[b.type];
   if (!preset) return { error: 'Pick an agent type.' };
-  const instructions = String(b.instructions || '').trim().slice(0, 8000);
+  const instructions = String(b.description || '').trim().slice(0, 8000);
   if (instructions.length < 10) return { error: 'Describe what this agent does in a sentence or two.' };
+  const description = clean(b.when, 300) || clean(instructions, 200);
+  const emblem = EMBLEMS.includes(b.emblem) ? b.emblem : 'orb';
   const scope = clean(b.scope, 200) || `docs/${name}/ and agent-missions/`;
 
   const NAME = name.toUpperCase();
@@ -225,6 +236,7 @@ You are ${NAME} (${role}) for the ${p.name} project, launched as a subagent by t
     fs.writeFileSync(promptPath, prompt, { flag: 'wx' });
     fs.writeFileSync(defPath, def, { flag: 'wx' });
     fs.writeFileSync(statusPath, 'state: idle\ntask: -\nstep: -\nupdated: -\noutput: -\n', { flag: 'wx' });
+    p.meta = p.meta || {}; p.meta[name] = { emblem, type: b.type }; saveProjects();
   } catch (e) { return { error: `Could not write the agent files: ${e.code || e.message}` }; }
   return { ok: true, name, project: p.id, root, files: [defPath, promptPath, statusPath] };
 }
@@ -241,7 +253,7 @@ function createProject(b) {
   try { fs.mkdirSync(agentsDir(p), { recursive: true }); fs.mkdirSync(statusDir(p), { recursive: true }); }
   catch (e) { return { error: `Could not prepare the folder: ${e.code || e.message}` }; }
   projects.push(p); saveProjects(); watchProject(p);
-  return { ok: true, project: { id: p.id, name: p.name, root: p.root } };
+  return { ok: true, id: p.id, project: { id: p.id, name: p.name, root: p.root } };
 }
 
 // ---------- live updates ----------
@@ -291,6 +303,7 @@ http.createServer((req, res) => {
       if (!body) return json(res, { error: 'Bad request.' }, 400);
       if (url.pathname === '/api/agents') { const r = createAgent(body); return json(res, r, r.error ? 400 : 200); }
       if (url.pathname === '/api/projects') { const r = createProject(body); return json(res, r, r.error ? 400 : 200); }
+      if (url.pathname === '/api/run' || url.pathname === '/api/stop') return json(res, { error: 'Launching from the board is not set up yet. Run the agent in Claude Code.' }, 501);
       json(res, { error: 'Not found.' }, 404);
     });
   }
@@ -299,12 +312,17 @@ http.createServer((req, res) => {
   if (url.pathname === '/api/state') {
     const p = getProject(url.searchParams.get('project') || '') || projects[0];
     const agents = readAgents(p);
-    return gitLog(p, commits => json(res, { project: { id: p.id, name: p.name, root: p.root }, agents, outputs: readOutputs(p, agents.map(a => a.name)), commits }));
+    const names = agents.map(a => a.name);
+    return gitLog(p, names, commits => json(res, { project: { id: p.id, name: p.name, root: p.root }, agents, docs: readOutputs(p, names), commits }));
   }
   if (url.pathname === '/api/file') {
     const full = resolveFile(url.searchParams.get('id') || '');
     if (!full) return json(res, { error: 'not found' }, 404);
-    try { return json(res, { id: url.searchParams.get('id'), mtime: fs.statSync(full).mtimeMs, text: fs.readFileSync(full, 'utf8') }); }
+    try {
+      const id = url.searchParams.get('id'), p = getProject(id.slice(0, id.indexOf(':')));
+      const meta = readOutputs(p, readAgents(p).map(a => a.name)).find(o => o.id === id) || {};
+      return json(res, { id, name: meta.name || path.basename(full), kind: meta.kind || 'Docs', agent: meta.agent || null, mtime: fs.statSync(full).mtimeMs, text: fs.readFileSync(full, 'utf8') });
+    }
     catch { return json(res, { error: 'not found' }, 404); }
   }
   if (url.pathname === '/api/events') {

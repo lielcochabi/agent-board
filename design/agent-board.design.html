@@ -375,6 +375,7 @@ dialog.sheet[open]{animation:sheetIn .24s var(--ease)}
         <svg viewBox="0 0 16 16"><circle cx="3.5" cy="8" r=".9" fill="currentColor"/><circle cx="8" cy="8" r=".9" fill="currentColor"/><circle cx="12.5" cy="8" r=".9" fill="currentColor"/></svg>
       </button>
       <div class="pop" id="pop" role="menu">
+        <label><input type="checkbox" id="launcherToggle"><span>Launcher unavailable<small>Demo: shows the copy-to-Claude-Code fallback in Run.</small></span></label>
         <label><input type="checkbox" id="motionToggle"><span>Preview reduced motion<small>Static state glyphs instead of animation.</small></span></label>
       </div>
     </div>
@@ -476,33 +477,248 @@ dialog.sheet[open]{animation:sheetIn .24s var(--ease)}
 </style>
 <script>
 /* ================================================================
-   DATA LAYER: the local Node server (server.js)
+   DATA LAYER — swap USE_MOCK to false to use the local Node API.
    ================================================================ */
+const USE_MOCK = true;
+
+const NOW = Date.now(), MIN = 60e3, HR = 60 * MIN, DAY = 24 * HR;
 const EMBLEMS = ['scout','compass','forge','echo','sentry','warden','herald','scribe','custodian','orb'];
 
-async function j(url){ const r = await fetch(url); if (!r.ok) throw new Error(r.status + ' ' + url); return r.json(); }
-async function post(url, body){
-  const r = await fetch(url, { method:'POST', headers:{ 'content-type':'application/json', 'x-board':'1' }, body: JSON.stringify(body) });
-  let data = {}; try { data = await r.json(); } catch {}
-  if (!r.ok) throw new Error(data.error || ('Request failed (' + r.status + ')'));
-  return data;
-}
-const api = {
-  projects: () => j('/api/projects'),
-  state: id => j('/api/state?project=' + encodeURIComponent(id)),
-  file: id => j('/api/file?id=' + encodeURIComponent(id)),
-  async run(project, agent, task){ await post('/api/run', { project, agent, task }); },
-  async stop(project, agent){ await post('/api/stop', { project, agent }); },
-  async createAgent(project, a){ await post('/api/agents', { project, ...a }); },
-  async createProject(p){ return (await post('/api/projects', p)).id; }
+const DOCTEXT = {
+'voice-context-budget-plan.md': `# Voice context budget plan
+
+Goal: keep every voice turn under **1.2 s** to first audio while JARVIS still remembers the last 20 minutes of conversation.
+
+## Budget per turn
+- System prompt and persona: 900 tokens (fixed)
+- Rolling conversation window: 2,400 tokens, oldest turns summarised first
+- Retrieved memory snippets: up to 3 × 250 tokens
+- Tool results: truncated to 400 tokens, full text kept on disk
+
+## Build order
+- forge: add a \`ContextBudget\` class in \`core/context.py\` that trims in the order above
+- forge: summarise turns older than 8 exchanges with the local 3B model, not the main model
+- sentry: add a latency test that fails above 1.2 s on the reference laptop
+- echo: shorten the persona block once the trimmer is in
+
+## Risks
+Summaries can drop names the user said once. Keep a separate list of named entities that is never trimmed.`,
+'omniroute-parse-fix-notes.md': `# Fix: OmniRoute response parse failure
+
+OmniRoute sometimes returns a streamed body where the final chunk is \`data: [DONE]\` without a trailing newline. The parser treated it as JSON and raised, which dropped the whole answer.
+
+## Change
+- \`router/omniroute.py\`: strip and skip the \`[DONE]\` sentinel before \`json.loads\`
+- Malformed chunks are now logged and skipped instead of aborting the stream
+- Added 6 tests in \`tests/test_omniroute_stream.py\`, including the missing-newline case
+
+## Result
+14 tests passing. No behaviour change for well-formed streams.
+
+Ready for warden to review.`,
+'release-notes-0.9.2-draft.md': `# JARVIS 0.9.2 — draft release notes
+
+## Fixed
+- Answers no longer disappear when OmniRoute ends a stream without a newline
+- Wake word no longer triggers on the TV in the next room (threshold 0.62 → 0.71)
+
+## Changed
+- Voice turns trim old context first, so long sessions stay fast
+
+## Release status
+Tagging failed: \`v0.9.2\` already exists on origin from an aborted run on Oct 5. Decide whether to delete the remote tag or ship as \`v0.9.3\`.`,
+'echo-tighten-system-prompt.md': `# Mission: tighten the system prompt
+
+From compass's context budget plan. The persona block is 1,450 tokens; the budget is 900.
+
+- Keep the three hard rules about confirmation before actions
+- Merge the two tone paragraphs
+- Move the long examples into memory snippets that load on demand
+
+Done when the block is under 900 tokens and the 12 voice regression prompts still pass.`,
+'echo-voice-persona-pass.md': `# Mission: voice persona pass
+
+Rewrite spoken confirmations so they are short enough to say in under two seconds.
+
+- "I've gone ahead and set a timer for ten minutes for you" → "Timer set, ten minutes."
+- Never read file paths aloud; say the file name only.`,
+'sentry-voice-loop-regression.md': `# Mission: voice loop regression
+
+Add an end-to-end test that plays the 12 reference clips through the wake word, STT, router and TTS, and fails if any turn takes longer than 1.2 s to first audio.`,
+'sentry-omniroute-edge-cases.md': `# Mission: OmniRoute edge cases
+
+forge's fix covers the missing newline. Also test: empty stream, two \`[DONE]\` sentinels, a 30 s stall mid-stream, and a non-UTF-8 byte in a chunk.`,
+'backtest-2022-results.md': `# Backtest — 2022 sample
+
+Mean-reversion on 15-minute bars, 24 liquid US tickers, $10k paper account.
+
+## Result
+- Net return: +6.8% (buy-and-hold SPY: −18.6%)
+- Max drawdown: −7.9%
+- Win rate: 54% over 1,312 trades
+- Sharpe (daily): 1.12
+
+## Notes
+Most of the edge came from Q2 and Q4 volatility. In the calm August stretch the strategy lost money on fees. Next: run 2023 to see whether it holds in a rising market.`
 };
 
-/* live updates: SSE "change" => refetch */
+function genericDoc(name, kind, agent){
+  const title = name.replace(/\.md$/,'').replace(/-/g,' ').replace(/^./, c => c.toUpperCase());
+  return `# ${title}\n\n${kind} written by ${agent}.\n\n## Summary\n- Scope and sources are listed at the end of this file\n- Findings are ordered by how much they affect the next build step\n- Open questions are marked for you to decide\n\n## Next step\nHand this to the planner, or ask ${agent} to go deeper on one section.`;
+}
+function doc(project, kind, name, agent, ago){
+  return { id: `${project}:${kind}/${name}`, name, kind, agent, mtime: NOW - ago, text: DOCTEXT[name] || genericDoc(name, kind, agent) };
+}
+
+const MOCK = {
+  projects: [
+    { id:'jarvis', name:'JARVIS', root:'C:\\Users\\liel\\code\\jarvis' },
+    { id:'trading-bot', name:'Trading bot', root:'C:\\Users\\liel\\code\\trading-bot' },
+    { id:'smart-cane', name:'Smart cane', root:'C:\\Users\\liel\\code\\smart-cane' }
+  ],
+  state: {
+    'jarvis': {
+      agents: [
+        { name:'scout', role:'Researcher · investigates before anything is built', emblem:'scout', type:'Researcher', state:'idle', task:'Survey local TTS engines under 300 ms', step:'Finished · 3 engines compared', updated:NOW-2*DAY, missions:0 },
+        { name:'compass', role:'Planner · turns research into a build plan', emblem:'compass', type:'Researcher', state:'done', task:'Voice context budget plan', step:'Wrote Plans/voice-context-budget-plan.md', updated:NOW-38*MIN, missions:0 },
+        { name:'forge', role:'Builder · writes the code', emblem:'forge', type:'Builder', state:'done', task:'Fix OmniRoute response parse failure', step:'Patch applied · 14 tests passing', updated:NOW-12*MIN, missions:0 },
+        { name:'echo', role:'Voice and prompt specialist', emblem:'echo', type:'Builder', state:'idle', task:'', step:'', updated:NOW-3*DAY, missions:2 },
+        { name:'sentry', role:'Tester · QA', emblem:'sentry', type:'Builder', state:'idle', task:'Voice loop QA pass', step:'Finished · 2 failures logged', updated:NOW-3*DAY, missions:2 },
+        { name:'warden', role:'Code reviewer', emblem:'warden', type:'Reviewer', state:'blocked', task:'Review the OmniRoute parse fix', step:'Waiting for you: allow running the full integration suite?', updated:NOW-6*MIN, missions:0 },
+        { name:'herald', role:'Release manager', emblem:'herald', type:'Builder', state:'failed', task:'Ship v0.9.2', step:'git push --tags rejected: v0.9.2 already exists on origin', updated:NOW-25*MIN, missions:0 },
+        { name:'scribe', role:'Docs keeper', emblem:'scribe', type:'Builder', state:'idle', task:'Refresh architecture overview', step:'', updated:NOW-6*DAY, missions:0 },
+        { name:'custodian', role:'Code quality auditor', emblem:'custodian', type:'Reviewer', state:'idle', task:'Weekly audit', step:'', updated:NOW-6*DAY, missions:0 }
+      ],
+      docs: [
+        doc('jarvis','Research','local-tts-latency-survey.md','scout',2*DAY),
+        doc('jarvis','Research','wake-word-engines.md','scout',5*DAY),
+        doc('jarvis','Plans','voice-context-budget-plan.md','compass',38*MIN),
+        doc('jarvis','Plans','omniroute-parse-fix-plan.md','compass',3*HR),
+        doc('jarvis','Docs','omniroute-parse-fix-notes.md','forge',12*MIN),
+        doc('jarvis','Missions','echo-tighten-system-prompt.md','echo',36*MIN),
+        doc('jarvis','Missions','echo-voice-persona-pass.md','echo',36*MIN),
+        doc('jarvis','Missions','sentry-voice-loop-regression.md','sentry',36*MIN),
+        doc('jarvis','Missions','sentry-omniroute-edge-cases.md','sentry',11*MIN),
+        doc('jarvis','QA','qa-voice-loop-2026-10-04.md','sentry',3*DAY),
+        doc('jarvis','Reviews','review-memory-indexer.md','warden',2*DAY),
+        doc('jarvis','Docs','release-notes-0.9.2-draft.md','herald',30*MIN),
+        doc('jarvis','Docs','architecture-overview.md','scribe',6*DAY),
+        doc('jarvis','Audits','audit-2026-10-01.md','custodian',6*DAY)
+      ],
+      commits: [
+        { hash:'a41c9e2', message:'router: skip [DONE] sentinel before JSON parse', agent:'forge', time:NOW-12*MIN },
+        { hash:'7be0d11', message:'tests: OmniRoute stream edge cases', agent:'forge', time:NOW-14*MIN },
+        { hash:'c09f3a8', message:'docs: draft 0.9.2 release notes', agent:'herald', time:NOW-31*MIN },
+        { hash:'52d7e40', message:'wake word: raise threshold to 0.71', agent:'you', time:NOW-1*DAY },
+        { hash:'e3a1b9f', message:'memory: index snippets by speaker', agent:'forge', time:NOW-2*DAY }
+      ]
+    },
+    'trading-bot': {
+      agents: [
+        { name:'backtester', role:'Researcher · replays strategies on historical data', emblem:'custodian', type:'Researcher', state:'running', task:'Backtest mean-reversion on the 2023 sample', step:'Running 2023 sample, step 4 of 9', updated:NOW-20e3, missions:0,
+          log:['Loading 2023 bars, step 1 of 9','Computing indicators, step 2 of 9','Generating signals, step 3 of 9','Running 2023 sample, step 4 of 9'] }
+      ],
+      docs: [
+        doc('trading-bot','Research','backtest-2022-results.md','backtester',1*DAY),
+        doc('trading-bot','QA','strategy-sanity-checks.md','backtester',2*DAY)
+      ],
+      commits: [
+        { hash:'9d2e6c0', message:'alpaca: retry paper orders on 429', agent:'you', time:NOW-1*DAY },
+        { hash:'31f7a5b', message:'news: cache LLM classifications per headline', agent:'you', time:NOW-3*DAY }
+      ]
+    },
+    'smart-cane': { agents: [], docs: [], commits: [] }
+  }
+};
+
+const OUT_KIND = { scout:'Research', compass:'Plans', forge:'Docs', echo:'Docs', sentry:'QA', warden:'Reviews', herald:'Docs', scribe:'Docs', custodian:'Audits' };
+const TYPE_KIND = { Researcher:'Research', Reviewer:'Reviews', Builder:'Docs' };
+const STEPS = {
+  Researcher:['Reading the brief','Scanning project files','Searching sources','Comparing options','Drafting findings','Writing report'],
+  Builder:['Reading the plan','Finding the files to change','Writing the change','Running unit tests','Fixing a failing test','Re-running tests','Writing change notes'],
+  Reviewer:['Reading the diff','Checking it against the plan','Tracing edge cases','Writing the review']
+};
+const clone = o => JSON.parse(JSON.stringify(o));
+const slug = s => s.toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'') || 'item';
+
+/* --- mock simulation of agent runs (stands in for the server) --- */
+const sim = {
+  timers: {},
+  agent(pid, name){ return MOCK.state[pid].agents.find(a => a.name === name); },
+  start(pid, name, task){
+    const a = this.agent(pid, name);
+    const verbs = STEPS[a.type] || STEPS.Researcher;
+    a.state = 'running'; a.task = task; a.log = [];
+    this.loop(pid, name, verbs.map((v,i) => `${v}, step ${i+1} of ${verbs.length}`), 0, 1700, null);
+  },
+  loop(pid, name, steps, i, every, outName){
+    const a = this.agent(pid, name), key = pid + '/' + name;
+    clearTimeout(this.timers[key]);
+    if (i >= steps.length) return this.finish(pid, name, outName);
+    a.step = steps[i]; a.updated = Date.now(); (a.log = a.log || []).push(steps[i]);
+    emitChange();
+    this.timers[key] = setTimeout(() => this.loop(pid, name, steps, i + 1, every, outName), every + Math.random() * 700);
+  },
+  finish(pid, name, outName){
+    const a = this.agent(pid, name), st = MOCK.state[pid];
+    const kind = OUT_KIND[name] || TYPE_KIND[a.type] || 'Docs';
+    const file = outName || (slug(a.task).slice(0, 40) + '.md');
+    const d = doc(pid, kind, file, name, 0); d.mtime = Date.now();
+    if (!DOCTEXT[file]) d.text = `# ${a.task}\n\n${kind} written by ${name} just now.\n\n## What was done\n- ${(a.log || []).map(s => s.replace(/, step.*$/,'')).join('\n- ')}\n\n## Next step\nRead through, then hand it to the next agent in the crew.`;
+    st.docs = st.docs.filter(x => x.id !== d.id); st.docs.push(d);
+    a.state = 'done'; a.step = `Finished · wrote ${kind}/${file}`; a.updated = Date.now(); a.newest = d.id;
+    emitChange();
+  },
+  stop(pid, name){
+    const a = this.agent(pid, name), key = pid + '/' + name;
+    clearTimeout(this.timers[key]);
+    const m = /step (\d+) of (\d+)/.exec(a.step || '');
+    a.state = 'idle'; a.step = m ? `Stopped by you at step ${m[1]} of ${m[2]}` : 'Stopped by you'; a.updated = Date.now();
+    emitChange();
+  }
+};
+// keep the sample backtest moving so the strip has something live
+setTimeout(() => sim.loop('trading-bot','backtester',
+  ['Running 2023 sample, step 5 of 9','Running 2023 sample, step 6 of 9','Scoring trades, step 7 of 9','Comparing to 2022 baseline, step 8 of 9','Writing results, step 9 of 9'],
+  0, 9000, 'backtest-2023-results.md'), 9000);
+
+const j = async url => { const r = await fetch(url); if (!r.ok) throw new Error(r.status + ' ' + url); return r.json(); };
+const post = (url, body) => fetch(url, { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body) });
+
+const api = {
+  async projects(){ return USE_MOCK ? clone(MOCK.projects) : j('/api/projects'); },
+  async state(id){ return USE_MOCK ? clone(MOCK.state[id] || {agents:[],docs:[],commits:[]}) : j('/api/state?project=' + encodeURIComponent(id)); },
+  async file(id){
+    if (!USE_MOCK) return j('/api/file?id=' + encodeURIComponent(id));
+    for (const k in MOCK.state){ const d = MOCK.state[k].docs.find(x => x.id === id); if (d) return clone(d); }
+    throw new Error('not found');
+  },
+  async run(project, agent, task){
+    if (USE_MOCK){ if (S.launcherDown) throw new Error('launcher not set up'); sim.start(project, agent, task); return; }
+    const r = await post('/api/run', { project, agent, task });
+    if (!r.ok) throw new Error('refused ' + r.status);
+  },
+  async stop(project, agent){ if (USE_MOCK) return sim.stop(project, agent); await post('/api/stop', { project, agent }); },
+  async createAgent(project, a){
+    if (!USE_MOCK){ const r = await post('/api/agents', { project, ...a }); if (!r.ok) throw new Error(await r.text()); return; }
+    MOCK.state[project].agents.push({ ...a, state:'idle', task:'', step:'', updated:Date.now(), missions:0 });
+    emitChange();
+  },
+  async createProject(p){
+    if (!USE_MOCK){ const r = await post('/api/projects', p); if (!r.ok) throw new Error(await r.text()); return (await r.json()).id; }
+    let id = slug(p.name); while (MOCK.projects.some(x => x.id === id)) id += '-2';
+    MOCK.projects.push({ id, ...p }); MOCK.state[id] = { agents:[], docs:[], commits:[] };
+    emitChange(); return id;
+  }
+};
+
+/* live updates: SSE "change" => refetch (mock calls emitChange directly) */
 let refetchTimer;
 function emitChange(){ clearTimeout(refetchTimer); refetchTimer = setTimeout(refetch, 60); }
-{
+if (!USE_MOCK){
   const es = new EventSource('/api/events');
   es.onmessage = e => { if (e.data === 'change') emitChange(); };
+  es.addEventListener('change', emitChange);
 }
 
 /* ================================================================
@@ -602,7 +818,7 @@ const embWrap = (kind, state) => `<span class="emb-wrap"${state ? ` data-state="
    UI STATE + HELPERS
    ================================================================ */
 const S = {
-  projects: [], all: {}, focus: 'jarvis', panel: null,
+  projects: [], all: {}, focus: 'jarvis', panel: null, launcherDown: false,
   logs: {}, justDone: {}, fallback: {}, runErr: {}, flash: {}, prevStates: {}, lastFocusEl: null, runKey: ''
 };
 const $ = s => document.querySelector(s);
@@ -932,7 +1148,7 @@ async function startRun(){
 /* ================================================================
    SHEETS
    ================================================================ */
-const TYPE_HELP = { Researcher:'Tools: Read, Grep, Glob, Bash, WebSearch, WebFetch, Write · writes notes to its docs folder', Reviewer:'Tools: Read, Grep, Glob, Bash, Write · writes review notes only, no code edits', Builder:'Tools: Read, Grep, Glob, Bash, Write, Edit · can change project files inside its scope' };
+const TYPE_HELP = { Researcher:'Tools: Read, Grep, Glob, WebSearch · no file writes', Reviewer:'Tools: Read, Grep, Glob · comments only, no edits', Builder:'Tools: Read, Edit, Write, Bash · writes inside its scope' };
 let pickedEmblem = 'orb';
 function setFieldError(wrapId, errId, msg){ const w = $('#' + wrapId); w.classList.toggle('bad', !!msg); if (msg && errId) $('#' + errId).textContent = msg; w.querySelector('input,textarea')?.setAttribute('aria-invalid', String(!!msg)); return !msg; }
 function openAgentSheet(){
@@ -970,7 +1186,7 @@ $('#agentForm').addEventListener('submit', async e => {
   const type = new FormData(e.target).get('type');
   try{
     await api.createAgent(pid, { name, role, emblem: pickedEmblem, type, when: $('#fWhen').value.trim(), description: what, scope: $('#fScope').value.trim() });
-  } catch(err){ return setFieldError('fwName', 'eName', err.message); }
+  } catch(err){ return setFieldError('fwName', 'eName', 'Couldn\'t save the agent file: ' + err.message); }
   $('#agentSheet').close();
   if (pid !== S.focus) focusProject(pid);
   toast(`Created <code>.claude/agents/${esc(name)}.md</code> — in Claude Code, say <code>Use the ${esc(name)} agent to …</code>`);
@@ -987,7 +1203,7 @@ $('#projectForm').addEventListener('submit', async e => {
   const okR = setFieldError('fwPRoot', 'ePRoot', !root ? 'Where does the code live?' : !/^([A-Za-z]:[\\/]|\/|~[\\/])/.test(root) ? 'Use a full path, like C:\\Users\\liel\\code\\app or ~/code/app.' : '');
   if (!(okN && okR)) return $('#projectSheet .field.bad input').focus();
   try{ const id = await api.createProject({ name, root }); $('#projectSheet').close(); await refetch(); focusProject(id); $('#tab-' + CSS.escape(id))?.focus(); }
-  catch(err){ setFieldError('fwPRoot', 'ePRoot', err.message); }
+  catch(err){ setFieldError('fwPRoot', 'ePRoot', 'Couldn\'t add it: ' + err.message); }
 });
 document.querySelectorAll('dialog').forEach(d => {
   d.addEventListener('click', e => { if (e.target.closest('[data-close]') || e.target === d) d.close(); });
@@ -1003,6 +1219,7 @@ $('#themeBtn').onclick = () => {
 function togglePop(on){ $('#pop').classList.toggle('on', on); $('#moreBtn').setAttribute('aria-expanded', String(on)); if (!on) $('#moreBtn').focus(); }
 $('#moreBtn').onclick = () => togglePop(!$('#pop').classList.contains('on'));
 document.addEventListener('click', e => { if ($('#pop').classList.contains('on') && !e.target.closest('.strip-tools')) togglePop(false); });
+$('#launcherToggle').onchange = e => { S.launcherDown = e.target.checked; };
 $('#motionToggle').onchange = e => document.documentElement.classList.toggle('rm-preview', e.target.checked);
 
 /* ================================================================ */
