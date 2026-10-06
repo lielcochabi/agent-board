@@ -4,130 +4,153 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#010102">
-<title>JARVIS Agent Board</title>
+<title>Agent Board</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
 <style>
-/* Design reference: Linear (near-black surface ladder, hairlines, one lavender accent used only for activity).
-   Layout: top bar, relay strip, then three columns: agents, outputs, document. */
+/* Reference: Linear (near-black desk, quiet trays, hairline rules, one signal colour reserved for activity).
+   Layout: one narrow agent rail, one main pane with Outputs / Commits tabs. Idle agents collapse to a single line. */
 :root{
-  --canvas:#010102; --s1:#0f1011; --s2:#141516; --s3:#18191a; --hair:#23252a; --hair2:#34343a;
-  --ink:#f7f8f8; --ink2:#d0d6e0; --ink3:#8a8f98; --ink4:#62666d;
-  --accent:#5e6ad2; --accent-hi:#828fff;
-  --ok:#27a644; --warn:#e5a50a; --bad:#eb5757; --idle:#62666d;
+  --desk:#010102; --tray:#0f1011; --tray-hi:#141516; --tray-top:#18191a; --rule:#23252a; --rule-hi:#34343a;
+  --ink:#f7f8f8; --ink-2:#d0d6e0; --ink-3:#8a8f98; --ink-4:#62666d;
+  --signal:#5e6ad2; --signal-hi:#828fff;
+  --shipped:#27a644; --hold:#e5a50a; --fault:#eb5757; --standby:#62666d;
   --sans:"Geist",system-ui,-apple-system,"Segoe UI",sans-serif; --mono:"Geist Mono",ui-monospace,Consolas,monospace;
   color-scheme:dark;
 }
 @media (prefers-color-scheme:light){:root:not([data-theme="dark"]){
-  --canvas:#ffffff; --s1:#f5f6f6; --s2:#eceef0; --s3:#e4e6e9; --hair:#e1e3e6; --hair2:#c9cdd2;
-  --ink:#0b0c0d; --ink2:#3a3f46; --ink3:#626a73; --ink4:#8a919a;
-  --accent:#5e6ad2; --accent-hi:#4a55b8; --ok:#1f8a3a; --warn:#a86400; --bad:#c93c3c; --idle:#8a919a; color-scheme:light}}
+  --desk:#ffffff; --tray:#f5f6f6; --tray-hi:#eceef0; --tray-top:#e4e6e9; --rule:#e1e3e6; --rule-hi:#c9cdd2;
+  --ink:#0b0c0d; --ink-2:#3a3f46; --ink-3:#626a73; --ink-4:#8a919a;
+  --signal:#5e6ad2; --signal-hi:#4a55b8; --shipped:#1f8a3a; --hold:#a86400; --fault:#c93c3c; --standby:#8a919a; color-scheme:light}}
 *{box-sizing:border-box}
 html,body{height:100%}
-body{margin:0;background:var(--canvas);color:var(--ink);font:14px/1.5 var(--sans);-webkit-font-smoothing:antialiased;touch-action:manipulation}
-button{font:inherit;color:inherit;touch-action:manipulation}
-a{color:var(--accent-hi)}
-.skip{position:absolute;left:12px;top:-60px;background:var(--accent);color:#fff;padding:8px 14px;border-radius:6px;z-index:10;text-decoration:none}
+body{margin:0;background:var(--desk);color:var(--ink);font:14px/1.5 var(--sans);-webkit-font-smoothing:antialiased;touch-action:manipulation}
+button,input,select,textarea{font:inherit;color:inherit;touch-action:manipulation}
+a{color:var(--signal-hi)}
+:focus-visible{outline:2px solid var(--signal-hi);outline-offset:2px}
+.skip{position:absolute;left:12px;top:-60px;background:var(--signal);color:#fff;padding:8px 14px;border-radius:6px;z-index:20;text-decoration:none}
 .skip:focus{top:12px}
-:focus-visible{outline:2px solid var(--accent-hi);outline-offset:2px}
 
-.app{display:grid;grid-template-columns:300px 330px minmax(0,1fr);grid-template-rows:56px auto minmax(0,1fr);height:100%}
-.top{grid-column:1/-1;display:flex;align-items:center;gap:20px;padding:0 20px;border-bottom:1px solid var(--hair);min-width:0}
-.brand{display:flex;align-items:center;gap:10px;font-weight:600;letter-spacing:-.01em}
-.brand svg{flex:none}
-h1{margin:0;font-size:14px;font-weight:600;letter-spacing:-.01em}
-.tally{display:flex;gap:6px;margin-left:8px}
-.tally span{display:flex;align-items:center;gap:6px;padding:2px 9px;border:1px solid var(--hair);border-radius:999px;font-size:12px;color:var(--ink3);font-variant-numeric:tabular-nums}
-.tally b{color:var(--ink);font-weight:500}
-.tally i{width:6px;height:6px;border-radius:50%;background:var(--idle)}
-.tally .running i{background:var(--accent-hi)}.tally .done i{background:var(--ok)}.tally .blocked i{background:var(--warn)}.tally .failed i{background:var(--bad)}
-.live{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink3)}
-.live i{width:7px;height:7px;border-radius:50%;background:var(--idle)}
-.live.on i{background:var(--ok)}
+.app{display:grid;grid-template-columns:288px minmax(0,1fr);height:100%}
+.rail{display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--rule)}
+.rail-head{padding:14px 14px 10px;display:flex;flex-direction:column;gap:10px}
+.brand{display:flex;align-items:center;gap:10px}
+.brand h1{margin:0;font-size:14px;font-weight:600;letter-spacing:-.01em}
+.field{display:flex;flex-direction:column;gap:5px}
+.field>span{font-size:12px;color:var(--ink-3)}
+select,input[type=text],textarea{width:100%;background:var(--desk);border:1px solid var(--rule-hi);border-radius:8px;padding:7px 10px;color:var(--ink)}
+select{appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--ink-3) 50%),linear-gradient(135deg,var(--ink-3) 50%,transparent 50%);background-position:calc(100% - 16px) 55%,calc(100% - 11px) 55%;background-size:5px 5px;background-repeat:no-repeat;padding-right:28px}
+select option{background:var(--tray);color:var(--ink)}
+textarea{resize:vertical;min-height:84px}
+input::placeholder,textarea::placeholder{color:var(--ink-4)}
+.list{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:4px 8px}
+.rail-foot{display:flex;gap:6px;padding:10px 12px;border-top:1px solid var(--rule)}
+.btn{border:1px solid var(--rule-hi);background:transparent;border-radius:8px;padding:6px 12px;cursor:pointer;color:var(--ink-2);font-size:13px}
+.btn:hover{background:var(--tray-hi);color:var(--ink)}
+.btn.primary{background:var(--signal);border-color:var(--signal);color:#fff;font-weight:500}
+.btn.primary:hover{background:var(--signal-hi);border-color:var(--signal-hi)}
+.btn[disabled]{opacity:.55;cursor:default}
+.rail-foot .btn{flex:1}
 
-.relay{grid-column:1/-1;display:flex;align-items:center;gap:4px;padding:10px 20px;border-bottom:1px solid var(--hair);overflow-x:auto;overscroll-behavior:contain;scrollbar-width:none}
-.relay::-webkit-scrollbar{display:none}
-.relay .lbl{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink4);margin-right:6px;white-space:nowrap}
-.relay .sep{color:var(--ink4);flex:none}
-.relay .gap{width:1px;height:16px;background:var(--hair2);margin:0 10px;flex:none}
-.node{display:flex;align-items:center;gap:6px;padding:3px 10px 3px 8px;border:1px solid var(--hair);border-radius:999px;background:transparent;cursor:pointer;font-size:12px;color:var(--ink3);white-space:nowrap;flex:none}
-.node:hover{background:var(--s2);color:var(--ink)}
-.node[aria-pressed=true]{border-color:var(--accent);color:var(--ink)}
-.node[data-state=running]{color:var(--ink);border-color:color-mix(in srgb,var(--accent) 55%,transparent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
-.node[data-state=done] .dot{background:var(--ok)}.node[data-state=blocked] .dot{background:var(--warn)}.node[data-state=failed] .dot{background:var(--bad)}.node[data-state=running] .dot{background:var(--accent-hi)}
-.dot{width:6px;height:6px;border-radius:50%;background:var(--idle)}
-
-.col{min-height:0;min-width:0;overflow:auto;overscroll-behavior:contain}
-.agents{border-right:1px solid var(--hair);padding:10px 8px}
-.outputs{border-right:1px solid var(--hair);padding:12px}
-h2{margin:0;font-size:11px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--ink4);padding:6px 8px}
-
-.row{display:grid;grid-template-columns:18px minmax(0,1fr) auto;gap:2px 10px;width:100%;text-align:left;padding:9px 8px;border:0;border-radius:8px;background:transparent;cursor:pointer}
-.row:hover{background:var(--s1)}
-.row[aria-pressed=true]{background:var(--s2)}
-.row .ico{grid-row:1/3;margin-top:2px;color:var(--idle)}
-.row[data-state=running] .ico{color:var(--accent-hi)}.row[data-state=done] .ico{color:var(--ok)}.row[data-state=blocked] .ico{color:var(--warn)}.row[data-state=failed] .ico{color:var(--bad)}
-.row .nm{font-weight:500;letter-spacing:-.005em}
-.row .nm small{color:var(--ink4);font-weight:400;margin-left:8px;font-size:12px}
-.row .when{font-size:12px;color:var(--ink4);font-variant-numeric:tabular-nums}
-.row .task{grid-column:2/-1;color:var(--ink2);font-size:13px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
-.row .step{grid-column:2/-1;color:var(--ink3);font-size:12px;overflow-wrap:anywhere}
+.row{display:grid;grid-template-columns:18px minmax(0,1fr) auto;gap:1px 10px;width:100%;text-align:left;padding:7px 8px;border:0;border-radius:8px;background:transparent;cursor:pointer;align-items:center}
+.row:hover{background:var(--tray)}
+.row[aria-pressed=true]{background:var(--tray-hi)}
+.row .ico{color:var(--standby);display:flex}
+.row[data-state=running] .ico{color:var(--signal-hi)}.row[data-state=done] .ico{color:var(--shipped)}.row[data-state=blocked] .ico{color:var(--hold)}.row[data-state=failed] .ico{color:var(--fault)}
+.row .nm{font-weight:500;letter-spacing:-.005em;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .nm small{color:var(--ink-4);font-weight:400;margin-left:8px;font-size:12px}
+.row .tail{font-size:12px;color:var(--ink-4);font-variant-numeric:tabular-nums}
+.row .task,.row .step{grid-column:2/-1;font-size:12.5px;overflow-wrap:anywhere}
+.row .task{color:var(--ink-2);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;margin-top:2px}
+.row .step{color:var(--ink-3)}
+.row.idle{padding-block:5px}
+.row.idle .nm{color:var(--ink-3);font-weight:400}
+.row.live{padding-block:9px}
 .spin{transform-origin:center;animation:spin 1.1s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
+.noagents{padding:18px 10px;color:var(--ink-3);font-size:13px;text-wrap:balance}
 
-.commits{margin-top:14px;border-top:1px solid var(--hair);padding-top:8px}
-.commit{display:flex;gap:10px;padding:3px 8px;font-size:12px;color:var(--ink3);min-width:0}
-.commit code{font-family:var(--mono);color:var(--accent-hi);flex:none}
-.commit span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.main{display:flex;flex-direction:column;min-width:0;min-height:0}
+.bar{display:flex;align-items:center;gap:16px;padding:0 20px;height:48px;border-bottom:1px solid var(--rule);flex:none}
+.tabs{display:flex;gap:2px}
+.tab{border:0;background:transparent;padding:6px 12px;border-radius:8px;cursor:pointer;color:var(--ink-3)}
+.tab:hover{color:var(--ink);background:var(--tray)}
+.tab[aria-selected=true]{color:var(--ink);background:var(--tray-hi)}
+.status{margin-left:auto;display:flex;align-items:center;gap:14px;font-size:12px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.status b{color:var(--ink);font-weight:500}
+.live-dot{display:flex;align-items:center;gap:7px}
+.live-dot i{width:7px;height:7px;border-radius:50%;background:var(--standby)}
+.live-dot.on i{background:var(--shipped)}
 
-.chips{display:flex;flex-wrap:wrap;gap:6px;padding:4px 4px 10px}
-.chip{border:1px solid var(--hair);background:transparent;border-radius:999px;padding:2px 11px;font-size:12px;color:var(--ink3);cursor:pointer}
-.chip:hover{color:var(--ink);background:var(--s1)}
-.chip[aria-pressed=true]{color:var(--ink);border-color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.body{flex:1;min-height:0;display:grid;grid-template-columns:300px minmax(0,1fr)}
+.outputs{border-right:1px solid var(--rule);display:flex;flex-direction:column;min-height:0}
+.ofilter{padding:12px 12px 8px;display:flex;flex-direction:column;gap:8px}
+.note{font-size:12px;color:var(--ink-3);display:flex;align-items:center;justify-content:space-between;gap:8px}
+.note button{border:0;background:transparent;color:var(--signal-hi);cursor:pointer;padding:0;font-size:12px}
+.olist{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:0 8px 12px}
 .item{display:block;width:100%;text-align:left;border:0;background:transparent;padding:8px 10px;border-radius:8px;cursor:pointer}
-.item:hover{background:var(--s1)}
-.item[aria-current=true]{background:var(--s2)}
+.item:hover{background:var(--tray)}
+.item[aria-current=true]{background:var(--tray-hi)}
 .item b{display:block;font-weight:500;font-size:13px;overflow-wrap:anywhere}
-.item small{display:flex;gap:8px;font-size:12px;color:var(--ink4);margin-top:1px}
-.item small em{font-style:normal;color:var(--ink3)}
-.note{padding:6px 8px;color:var(--ink3);font-size:12px}
-.empty{padding:28px 10px;color:var(--ink3);font-size:13px;text-wrap:balance}
+.item small{display:flex;gap:8px;font-size:12px;color:var(--ink-4);margin-top:1px}
+.empty{padding:26px 10px;color:var(--ink-3);font-size:13px;text-wrap:balance}
 
-.viewer{padding:0;scroll-margin-top:12px}
-.vhead{position:sticky;top:0;background:color-mix(in srgb,var(--canvas) 88%,transparent);backdrop-filter:blur(8px);padding:16px 36px 12px;border-bottom:1px solid var(--hair);z-index:1}
-.vhead h2{padding:0;text-transform:none;letter-spacing:-.01em;font-size:15px;font-weight:600;color:var(--ink);overflow-wrap:anywhere}
-.vmeta{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;margin-top:6px;font-size:12px;color:var(--ink3)}
-.badge{padding:1px 8px;border-radius:999px;background:var(--s2);color:var(--ink2);font-size:11px}
-.copy{margin-left:auto;border:1px solid var(--hair);background:transparent;border-radius:6px;padding:2px 10px;font-size:12px;color:var(--ink3);cursor:pointer}
-.copy:hover{color:var(--ink);background:var(--s2)}
-.doc{max-width:74ch;padding:26px 36px 80px;font-size:15px;line-height:1.7;color:var(--ink2)}
-.doc h1,.doc h2,.doc h3,.doc h4{color:var(--ink);line-height:1.25;letter-spacing:-.02em;margin:1.8em 0 .5em;text-wrap:balance;scroll-margin-top:90px;text-transform:none;padding:0}
-.doc h1{font-size:26px;margin-top:0;font-weight:600}.doc h2{font-size:19px;font-weight:600;color:var(--ink);font-size:19px}.doc h3{font-size:16px;font-weight:600}.doc h4{font-size:14px}
+.viewer{overflow:auto;overscroll-behavior:contain;min-width:0;min-height:0}
+.vhead{position:sticky;top:0;background:color-mix(in srgb,var(--desk) 88%,transparent);backdrop-filter:blur(8px);padding:16px 32px 12px;border-bottom:1px solid var(--rule);z-index:1}
+.vhead h2{margin:0;font-size:15px;font-weight:600;letter-spacing:-.01em;overflow-wrap:anywhere}
+.vmeta{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;margin-top:6px;font-size:12px;color:var(--ink-3)}
+.badge{padding:1px 8px;border-radius:999px;background:var(--tray-hi);color:var(--ink-2);font-size:11px}
+.copy{margin-left:auto;padding:2px 10px;font-size:12px}
+.doc{max-width:74ch;padding:24px 32px 80px;font-size:15px;line-height:1.7;color:var(--ink-2)}
+.doc h1,.doc h2,.doc h3,.doc h4{color:var(--ink);line-height:1.25;letter-spacing:-.02em;margin:1.8em 0 .5em;text-wrap:balance;scroll-margin-top:90px;font-weight:600}
+.doc h1{font-size:26px;margin-top:0}.doc h2{font-size:19px}.doc h3{font-size:16px}.doc h4{font-size:14px}
 .doc p,.doc li{overflow-wrap:anywhere}
 .doc strong{color:var(--ink);font-weight:600}
-.doc code{font-family:var(--mono);font-size:.86em;background:var(--s2);border:1px solid var(--hair);padding:1px 6px;border-radius:5px;color:var(--ink)}
-.doc pre{background:var(--s1);border:1px solid var(--hair);border-radius:10px;padding:14px 16px;overflow:auto}
+.doc code{font-family:var(--mono);font-size:.86em;background:var(--tray-hi);border:1px solid var(--rule);padding:1px 6px;border-radius:5px;color:var(--ink)}
+.doc pre{background:var(--tray);border:1px solid var(--rule);border-radius:10px;padding:14px 16px;overflow:auto}
 .doc pre code{background:none;border:0;padding:0}
-.doc blockquote{margin:1em 0;padding:2px 16px;border-left:2px solid var(--accent);color:var(--ink3)}
+.doc blockquote{margin:1em 0;padding:2px 16px;border-left:2px solid var(--signal);color:var(--ink-3)}
 .doc table{border-collapse:collapse;display:block;overflow:auto;font-size:13px}
-.doc th,.doc td{border:1px solid var(--hair);padding:6px 12px;text-align:left}
-.doc th{background:var(--s1);color:var(--ink);font-weight:500}
-.doc hr{border:0;border-top:1px solid var(--hair);margin:2em 0}
-.welcome{padding:60px 36px;max-width:56ch}
-.welcome h2{font-size:18px;color:var(--ink);text-transform:none;letter-spacing:-.01em;padding:0;margin-bottom:8px}
-.welcome p{color:var(--ink3);margin:0}
+.doc th,.doc td{border:1px solid var(--rule);padding:6px 12px;text-align:left}
+.doc th{background:var(--tray);color:var(--ink);font-weight:500}
+.doc hr{border:0;border-top:1px solid var(--rule);margin:2em 0}
+.welcome{padding:56px 32px;max-width:52ch}
+.welcome h2{font-size:18px;margin:0 0 8px;letter-spacing:-.01em}
+.welcome p{color:var(--ink-3);margin:0}
 
-@media (max-width:1100px){.app{grid-template-columns:250px 260px minmax(0,1fr)}.vhead,.doc,.welcome{padding-inline:22px}}
+.commits{padding:12px 20px 40px;overflow:auto;min-height:0;flex:1}
+.commit{display:grid;grid-template-columns:72px minmax(0,1fr) auto;gap:14px;padding:9px 6px;border-bottom:1px solid var(--rule);align-items:baseline}
+.commit code{font-family:var(--mono);color:var(--signal-hi);font-size:13px}
+.commit span{overflow-wrap:anywhere}
+.commit small{color:var(--ink-4);white-space:nowrap}
+
+dialog{background:var(--tray);color:var(--ink);border:1px solid var(--rule-hi);border-radius:14px;padding:0;width:min(520px,calc(100vw - 32px));max-height:calc(100vh - 32px);overflow:auto;overscroll-behavior:contain}
+dialog::backdrop{background:rgba(0,0,0,.6)}
+.dlg{padding:22px 24px 20px;display:flex;flex-direction:column;gap:14px}
+.dlg h2{margin:0;font-size:17px;letter-spacing:-.015em}
+.dlg .lede{margin:-6px 0 0;color:var(--ink-3);font-size:13px}
+.dlg .two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.dlg .hint{font-size:12px;color:var(--ink-4)}
+.dlg .err{color:var(--fault);font-size:13px;min-height:0}
+.dlg .actions{display:flex;justify-content:flex-end;gap:8px;margin-top:2px}
+.dlg pre{margin:0;background:var(--desk);border:1px solid var(--rule);border-radius:8px;padding:10px 12px;font:12.5px/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
+.dlg ul{margin:0;padding-left:18px;color:var(--ink-3);font-size:12.5px;overflow-wrap:anywhere}
+
+@media (max-width:900px){.body{grid-template-columns:260px minmax(0,1fr)}.vhead,.doc,.welcome{padding-inline:20px}}
 @media (max-width:760px){
   html,body{height:auto}
   .app{display:block;height:auto}
-  .top{height:auto;min-height:56px;flex-wrap:wrap;padding:10px 16px}
-  .relay{padding-inline:16px}
-  .col{overflow:visible}
-  .agents,.outputs{border-right:0;border-bottom:1px solid var(--hair);padding-inline:12px}
-  .outputs{display:block}
+  .rail{border-right:0;border-bottom:1px solid var(--rule)}
+  .list{max-height:none;overflow:visible}
+  .body{display:block}
+  .outputs{border-right:0;border-bottom:1px solid var(--rule)}
+  .olist{max-height:320px}
+  .viewer{overflow:visible}
+  .bar{padding-inline:14px;flex-wrap:wrap;height:auto;min-height:48px;padding-block:6px}
   .vhead,.doc,.welcome{padding-inline:16px}
+  .dlg .two{grid-template-columns:1fr}
+  .commit{grid-template-columns:64px minmax(0,1fr)}.commit small{grid-column:2}
 }
 @media (prefers-reduced-motion:reduce){.spin{animation:none}}
 </style>
@@ -135,19 +158,66 @@ h2{margin:0;font-size:11px;font-weight:500;letter-spacing:.06em;text-transform:u
 <body>
 <a class="skip" href="#viewer">Skip to document</a>
 <div class="app">
-  <header class="top">
-    <div class="brand">
-      <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><rect x="1" y="1" width="18" height="18" rx="5" fill="var(--accent)"/><path d="M6 10.5l2.6 2.6L14 7.5" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      <h1 translate="no">JARVIS Agent Board</h1>
+  <aside class="rail" aria-label="Projects and agents">
+    <div class="rail-head">
+      <div class="brand">
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><rect x="1" y="1" width="18" height="18" rx="5" fill="var(--signal)"/><path d="M6 10.5l2.6 2.6L14 7.5" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <h1>Agent Board</h1>
+      </div>
+      <label class="field"><span>Project</span><select id="project" name="project"></select></label>
     </div>
-    <div class="tally" id="tally" aria-live="polite"></div>
-    <div class="live" id="live" role="status"><i></i><span>Connecting…</span></div>
-  </header>
-  <nav class="relay" id="relay" aria-label="Agent relay"></nav>
-  <aside class="col agents" id="agents" aria-label="Agents"></aside>
-  <section class="col outputs" id="outputs" aria-label="Agent outputs"></section>
-  <main class="col viewer" id="viewer" tabindex="-1"><div class="welcome"><h2>Pick something to read</h2><p>Choose an agent to see what it produced, then open a plan, QA note, review or mission to read it here.</p></div></main>
+    <div class="list" id="agents"></div>
+    <div class="rail-foot">
+      <button class="btn primary" id="newAgent" type="button">New agent</button>
+      <button class="btn" id="newProject" type="button">Add project</button>
+    </div>
+  </aside>
+  <div class="main">
+    <header class="bar">
+      <div class="tabs" role="tablist" aria-label="Views">
+        <button class="tab" role="tab" id="tab-outputs" data-tab="outputs" type="button">Outputs</button>
+        <button class="tab" role="tab" id="tab-commits" data-tab="commits" type="button">Commits</button>
+      </div>
+      <div class="status" aria-live="polite"><span id="running"></span><span class="live-dot" id="live" role="status"><i></i><span>Connecting…</span></span></div>
+    </header>
+    <div class="body" id="body"></div>
+  </div>
 </div>
+
+<dialog id="agentDlg" aria-labelledby="agentTitle">
+  <form class="dlg" id="agentForm" method="dialog" novalidate>
+    <h2 id="agentTitle">New agent</h2>
+    <p class="lede">Creates the agent's definition, job description and status file in the project you pick.</p>
+    <label class="field"><span>Project</span><select id="a-project" name="project"></select></label>
+    <div class="two">
+      <label class="field"><span>Name</span><input type="text" id="a-name" name="name" autocomplete="off" spellcheck="false" placeholder="e.g. test-writer…"></label>
+      <label class="field"><span>Role</span><input type="text" id="a-role" name="role" autocomplete="off" placeholder="e.g. Test writer…"></label>
+    </div>
+    <label class="field"><span>When should it be used?</span><input type="text" id="a-desc" name="description" autocomplete="off" placeholder="e.g. Writes unit tests for a module I name…"></label>
+    <label class="field"><span>Type</span>
+      <select id="a-preset" name="preset">
+        <option value="researcher">Researcher: reads, searches the web, writes notes</option>
+        <option value="reviewer">Reviewer: reads and runs checks, writes findings</option>
+        <option value="builder">Builder: can edit project files</option>
+      </select>
+    </label>
+    <label class="field"><span>What does it do?</span><textarea id="a-instr" name="instructions" placeholder="Describe the job, what good looks like, and anything it must never do…"></textarea></label>
+    <label class="field"><span>Where may it write? (optional)</span><input type="text" id="a-scope" name="scope" autocomplete="off" placeholder="Default: its own docs folder and agent-missions…"><span class="hint">Builders can edit anywhere you list here.</span></label>
+    <div class="err" id="a-err" role="alert"></div>
+    <div class="actions"><button class="btn" type="button" id="a-cancel">Cancel</button><button class="btn primary" type="submit" id="a-submit">Create agent</button></div>
+  </form>
+</dialog>
+
+<dialog id="projectDlg" aria-labelledby="projectTitle">
+  <form class="dlg" id="projectForm" method="dialog" novalidate>
+    <h2 id="projectTitle">Add project</h2>
+    <p class="lede">Point the board at a project folder. It will track that project's agents and outputs.</p>
+    <label class="field"><span>Name</span><input type="text" id="p-name" name="name" autocomplete="off" placeholder="e.g. Trading bot…"></label>
+    <label class="field"><span>Folder</span><input type="text" id="p-root" name="root" autocomplete="off" spellcheck="false" placeholder="C:\Users\you\Desktop\my-project…"></label>
+    <div class="err" id="p-err" role="alert"></div>
+    <div class="actions"><button class="btn" type="button" id="p-cancel">Cancel</button><button class="btn primary" type="submit" id="p-submit">Add project</button></div>
+  </form>
+</dialog>
 <script src="app.js"></script>
 </body>
 </html>
