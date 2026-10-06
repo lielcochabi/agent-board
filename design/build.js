@@ -65,6 +65,13 @@ rep(`catch(err){ setFieldError('fwPRoot', 'ePRoot', 'Couldn\\'t add it: ' + err.
 // 5. the stage no longer needs the mock-only global
 rep(`projects: [], all: {}, focus: 'jarvis', panel: null, launcherDown: false,`, `projects: [], all: {}, focus: 'jarvis', panel: null,`);
 
+// 6. no launch control: agents run from Claude Code; the board only follows them.
+rep('    POST /api/run   {project, agent, task}  -> 2xx = launched, anything else => copy-paste fallback\n    POST /api/stop  {project, agent}\n', '');
+rep(`<section class="p-sec" id="pRun" aria-label="Run"></section>`, '');
+cut('  // run control\n  const mode = ', '  // outputs\n', '');
+cut("  const key = S.focus + '/' + S.panel?.agent;\n  if (t.closest('[data-run]'))", '/* ================================================================\n   SHEETS', '});\n\n');
+rep("  async run(project, agent, task){ await post('/api/run', { project, agent, task }); },\n  async stop(project, agent){ await post('/api/stop', { project, agent }); },\n", '');
+
 fs.mkdirSync(path.join(__dirname, '..', 'public'), { recursive: true });
 fs.writeFileSync(path.join(__dirname, '..', 'public', 'index.html'), t);
 console.log('built public/index.html', t.length, 'bytes');

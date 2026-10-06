@@ -302,9 +302,7 @@ http.createServer((req, res) => {
     return readBody(req, body => {
       if (!body) return json(res, { error: 'Bad request.' }, 400);
       if (url.pathname === '/api/agents') { const r = createAgent(body); return json(res, r, r.error ? 400 : 200); }
-      if (url.pathname === '/api/projects') { const r = createProject(body); return json(res, r, r.error ? 400 : 200); }
-      if (url.pathname === '/api/run' || url.pathname === '/api/stop') return json(res, { error: 'Launching from the board is not set up yet. Run the agent in Claude Code.' }, 501);
-      json(res, { error: 'Not found.' }, 404);
+      if (url.pathname === '/api/projects') { const r = createProject(body); return json(res, r, r.error ? 400 : 200); }      json(res, { error: 'Not found.' }, 404);
     });
   }
 

@@ -4,7 +4,7 @@ Local web app (no dependencies, Node 18+) for managing AI agents across several 
 
 - **Folder strip:** one tab per project. A small dot on each tab shows running, blocked, failed or just-finished work in that project.
 - **Stage:** the focused project's agents as animated emblems. Active agents sit forward; idle ones stand by.
-- **Agent panel:** current task and step, a Run box, and the agent's output documents rendered as text. Commits are behind the Commits button.
+- **Agent panel:** current task and step and the agent's output documents rendered as text. Commits are behind the Commits button. There is no launch button: agents run from Claude Code and the board follows them.
 - **Create:** "New agent" writes the agent's definition, job description and status file into the project; "+" adds a project folder.
 - **Live:** changes on disk are pushed to the page over Server-Sent Events.
 
@@ -42,4 +42,4 @@ Registered projects and agent emblems are stored in `projects.json` (machine-spe
 
 ## Security
 
-The server only listens on `127.0.0.1`, rejects requests whose Host header is not localhost, and requires an `X-Board` header on every POST so other websites cannot call it. It only reads files inside each project's output folders. It never executes anything: `/api/run` and `/api/stop` answer 501 until launching is built, and the Run box falls back to a sentence you paste into Claude Code.
+The server only listens on `127.0.0.1`, rejects requests whose Host header is not localhost, and requires an `X-Board` header on every POST so other websites cannot call it. It only reads files inside each project's output folders. It never executes anything; it only reads files and, on request, writes new agent files into a project.
