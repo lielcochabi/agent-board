@@ -1,0 +1,11 @@
+{
+  "name": "agent-board",
+  "owner": { "name": "Liel" },
+  "plugins": [
+    {
+      "name": "board",
+      "source": "./",
+      "description": "Live board of your Claude Code agents, with one-click run requests handled inside your own session."
+    }
+  ]
+}

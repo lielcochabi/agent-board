@@ -1,6 +1,6 @@
 // Agent Board: zero-dependency local server.
 // Reads agent status files and agent output docs from disk for any registered project, streams change events to the browser,
-// and creates new agents / registers new projects (files only, nothing is executed).
+// creates new agents / registers new projects, and queues run requests (files only, nothing is executed).
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -8,14 +8,19 @@ const { execFile } = require('child_process');
 
 const PORT = Number(process.env.PORT) || 4747;
 const PUBLIC = path.join(__dirname, 'public');
-const PROJECTS_FILE = path.join(__dirname, 'projects.json');
+// Machine-specific state lives outside the plugin folder when installed as a plugin (CLAUDE_PLUGIN_DATA survives updates).
+const DATA_DIR = process.env.BOARD_DATA || process.env.CLAUDE_PLUGIN_DATA || __dirname;
+try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch {}
+const PROJECTS_FILE = path.join(DATA_DIR, 'projects.json');
 
 // ---------- projects ----------
-const JARVIS_ROOT = process.env.JARVIS_PROJECT || 'C:/Users/lielc/Desktop/personalAi-testing';
+// The JARVIS mapping is only used when JARVIS_PROJECT is set; a fresh install starts with an empty board.
+const JARVIS_ROOT = process.env.JARVIS_PROJECT || '';
 const JARVIS_REPO = process.env.JARVIS_REPO || path.join(JARVIS_ROOT, 'jarvis-client');
-const JARVIS_TODO = process.env.JARVIS_TODO || 'C:/Users/lielc/Desktop/JARVIS-TODO.md';
+const JARVIS_TODO = process.env.JARVIS_TODO || '';
 
 function defaultProjects() {
+  if (!JARVIS_ROOT) return [];
   const d = (rel, base = JARVIS_REPO) => path.join(base, rel);
   return [{
     id: 'jarvis', name: 'JARVIS', root: JARVIS_ROOT, repo: JARVIS_REPO,
@@ -29,7 +34,7 @@ function defaultProjects() {
       { key: 'prompts', label: 'Prompt log', dir: d('docs/prompt-log'), agent: 'echo' },
       { key: 'missions', label: 'Missions', dir: d('agent-missions', JARVIS_ROOT), agent: 'mission' },
     ],
-    files: [{ key: 'todo', label: 'TODO', file: JARVIS_TODO, agent: 'scribe' }],
+    files: JARVIS_TODO ? [{ key: 'todo', label: 'TODO', file: JARVIS_TODO, agent: 'scribe' }] : [],
   }];
 }
 function genericProject(id, name, root) {
@@ -50,6 +55,7 @@ const getProject = id => projects.find(p => p.id === id);
 const statusDir = p => path.join(p.root, 'agent-status');
 const agentsDir = p => path.join(p.root, '.claude', 'agents');
 const promptsDir = p => path.join(p.root, 'agent-prompts');
+const requestsDir = p => path.join(p.root, 'agent-requests');
 
 // ---------- reading ----------
 function parseStatus(text) {
@@ -90,6 +96,8 @@ function readAgents(p) {
   try { names = fs.readdirSync(agentsDir(p)).filter(f => f.endsWith('.md')); } catch {}
   const missionRoot = p.outputs.find(o => o.key === 'missions');
   const missionFiles = missionRoot ? walk(missionRoot.dir) : [];
+  let requestFiles = [];
+  try { requestFiles = fs.readdirSync(requestsDir(p)).filter(f => f.endsWith('.md')); } catch {}
   const agents = names.map(f => {
     const fm = parseFrontmatter(fs.readFileSync(path.join(agentsDir(p), f), 'utf8'));
     const name = fm.name || f.replace(/\.md$/, '');
@@ -102,7 +110,8 @@ function readAgents(p) {
     return { name, role, emblem: meta.emblem || (EMBLEMS.includes(name) ? name : 'orb'), type: meta.type || agentType(fm.tools),
              state: (s.state || 'idle').toLowerCase(), task: dash(s.task), step: dash(s.step),
              updated: mt || (isNaN(parsed) ? 0 : parsed), output: dash(s.output),
-             missions: missionFiles.filter(m => m.toLowerCase().startsWith(name + '-')).length };
+             missions: missionFiles.filter(m => m.toLowerCase().startsWith(name + '-')).length,
+             requests: requestFiles.filter(m => m.toLowerCase().startsWith(name + '-')).length };
   });
   const rank = n => { const i = p.order.indexOf(n); return i < 0 ? 999 : i; };
   return agents.sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name));
@@ -241,6 +250,30 @@ You are ${NAME} (${role}) for the ${p.name} project, launched as a subagent by t
   return { ok: true, name, project: p.id, root, files: [defPath, promptPath, statusPath] };
 }
 
+// A run request is just a file in <project>/agent-requests/. The server never starts anything:
+// the board plugin in Claude Code reads the queue and runs the agent inside the user's own session.
+function createRequest(b) {
+  const p = getProject(clean(b.project, 60));
+  if (!p) return { error: 'Pick a project first.' };
+  const agent = clean(b.agent, 40);
+  if (!readAgents(p).some(a => a.name === agent)) return { error: `There is no agent named "${agent}" in ${p.name}.` };
+  const task = String(b.task || '').trim().slice(0, 2000);
+  if (task.length < 3) return { error: 'Write a task first. One sentence is enough.' };
+  const dir = requestsDir(p);
+  let pending = 0;
+  try { pending = fs.readdirSync(dir).filter(f => f.startsWith(agent + '-') && f.endsWith('.md')).length; } catch {}
+  if (pending >= 10) return { error: `${agent} already has ${pending} requests waiting. Run /board:run in Claude Code first.` };
+  const now = new Date();
+  const file = path.join(dir, `${agent}-${now.toISOString().replace(/[-:]/g, '').replace(/\..*/, '')}-${Math.random().toString(36).slice(2, 6)}.md`);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const text = ['agent: ' + agent, 'requested: ' + now.toISOString(), 'status: pending', '---', task, ''].join('\n');
+    fs.writeFileSync(file, text, { flag: 'wx' });
+  } catch (e) { return { error: `Could not queue the request: ${e.code || e.message}` }; }
+  watch(dir); broadcast();
+  return { ok: true, queued: path.basename(file), command: `/board:run ${agent}` };
+}
+
 function createProject(b) {
   const name = clean(b.name, 40), root = clean(b.root, 400);
   if (name.length < 2) return { error: 'Give the project a name.' };
@@ -269,7 +302,7 @@ function watch(dir, recursive = true) {
   try { fs.watch(dir, { recursive }, () => broadcast()); watched.add(dir); } catch {}
 }
 function watchProject(p) {
-  [statusDir(p), agentsDir(p), ...p.outputs.map(o => o.dir)].forEach(d => watch(d));
+  [statusDir(p), agentsDir(p), requestsDir(p), ...p.outputs.map(o => o.dir)].forEach(d => watch(d));
   (p.files || []).forEach(f => watch(path.dirname(f.file), false));
   watch(p.root, false); // catches output folders being created later
 }
@@ -302,13 +335,16 @@ http.createServer((req, res) => {
     return readBody(req, body => {
       if (!body) return json(res, { error: 'Bad request.' }, 400);
       if (url.pathname === '/api/agents') { const r = createAgent(body); return json(res, r, r.error ? 400 : 200); }
-      if (url.pathname === '/api/projects') { const r = createProject(body); return json(res, r, r.error ? 400 : 200); }      json(res, { error: 'Not found.' }, 404);
+      if (url.pathname === '/api/projects') { const r = createProject(body); return json(res, r, r.error ? 400 : 200); }
+      if (url.pathname === '/api/requests') { const r = createRequest(body); return json(res, r, r.error ? 400 : 200); }
+      json(res, { error: 'Not found.' }, 404);
     });
   }
 
   if (url.pathname === '/api/projects') return json(res, projects.map(p => ({ id: p.id, name: p.name, root: p.root })));
   if (url.pathname === '/api/state') {
     const p = getProject(url.searchParams.get('project') || '') || projects[0];
+    if (!p) return json(res, { error: 'No projects yet.' }, 404);
     const agents = readAgents(p);
     const names = agents.map(a => a.name);
     return gitLog(p, names, commits => json(res, { project: { id: p.id, name: p.name, root: p.root }, agents, docs: readOutputs(p, names), commits }));

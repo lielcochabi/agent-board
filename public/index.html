@@ -11,6 +11,7 @@
     GET  /api/state?project=ID    -> {agents:[...], docs:[...], commits:[...]}
     GET  /api/file?id=...         -> {id, name, kind, agent, mtime, text}
     GET  /api/events  (SSE)       -> message data "change" => refetch
+    POST /api/requests {project, agent, task} -> queues a request file; Claude Code runs it (/board:run)
 
   MOTION RULES (short version — full notes in the design system README)
   1. Motion means work. Only a running agent's emblem moves. No ambient/background animation anywhere.
@@ -489,6 +490,7 @@ const api = {
   projects: () => j('/api/projects'),
   state: id => j('/api/state?project=' + encodeURIComponent(id)),
   file: id => j('/api/file?id=' + encodeURIComponent(id)),
+  async run(project, agent, task){ return post('/api/requests', { project, agent, task }); },
   async createAgent(project, a){ await post('/api/agents', { project, ...a }); },
   async createProject(p){ return (await post('/api/projects', p)).id; }
 };
@@ -843,7 +845,7 @@ async function renderPanel(){
   if (S.headKey !== hk){
     S.headKey = hk;
     head.innerHTML = `${embWrap(a.emblem, a.state)}<div class="p-title"><h2>${esc(a.name)}</h2><div class="sub">${esc(a.role)}</div></div>${CLOSE_BTN}`;
-    body.innerHTML = `<section class="p-sec" id="pFacts"></section><section class="p-sec" id="pDocs"></section>`;
+    body.innerHTML = `<section class="p-sec" id="pFacts"></section><section class="p-sec" id="pRun" aria-label="Run"></section><section class="p-sec" id="pDocs"></section>`;
     S.runKey = '';
   }
   head.querySelector('.emb-wrap').dataset.state = a.state;
@@ -854,7 +856,38 @@ async function renderPanel(){
     <dt>Step</dt><dd class="step">${a.step ? esc(a.step) : '<span class="muted">—</span>'}</dd>
     <dt>Updated</dt><dd class="mono" style="font-size:13px" title="${abs(a.updated)}">${ago(a.updated)}</dd>
     <dt>Type</dt><dd>${esc(a.type || '—')}</dd>
-    ${a.missions ? `<dt>Missions</dt><dd>${a.missions} waiting</dd>` : ''}</dl>`;
+    ${a.missions ? `<dt>Missions</dt><dd>${a.missions} waiting</dd>` : ''}${a.requests ? `<dt>Queued</dt><dd>${a.requests} request${a.requests > 1 ? 's' : ''} waiting for Claude Code</dd>` : ''}</dl>`;
+  // run control
+  const mode = a.state === 'running' ? 'live' : S.fallback[key] ? 'fallback' : 'form';
+  const rk = mode + ':' + a.name + ':' + (S.justDone?.[key] || '') + ':' + (S.runErr[key] || '');
+  const run = $('#pRun');
+  if (S.runKey !== rk){
+    S.runKey = rk;
+    let h = `<p class="p-label">Send to Claude Code</p>`;
+    if (mode === 'live'){
+      h += `<div class="runbox live"><div class="progress" aria-hidden="true"><i id="pProg"></i></div>
+        <div class="row"><span class="hint">${esc(a.task)}</span></div></div>`;
+    } else if (mode === 'fallback'){
+      const line = `Use the ${a.name} agent to ${S.fallback[key]}`;
+      h += `<div class="fallback"><p>Queued. In your Claude Code session run <code>/board:run ${esc(a.name)}</code>, or paste this sentence instead:</p>
+        <div class="copyline"><code id="copyText">${esc(line)}</code><button class="btn" data-copy>Copy</button></div>
+        <div class="row" style="display:flex;justify-content:space-between;margin-top:10px"><button class="back-link" data-edit>← Edit task</button><span class="hint mono" style="font-size:12px;color:var(--ink-3)">The board updates when it starts.</span></div></div>`;
+    } else {
+      const jd = S.justDone?.[key];
+      if (jd) h += `<div class="done-note"><span>Finished ${ago(a.updated)}.</span><button class="linkish" data-doc="${esc(jd)}">Open newest output →</button></div>`;
+      h += `<div class="runbox"><label for="taskIn" class="sr">What should it do?</label><textarea id="taskIn" placeholder="What should it do? It is queued here and run by Claude Code." aria-describedby="runHint"></textarea>
+        <div class="row"><span class="hint ${S.runErr[key] ? 'err' : ''}" id="runHint">${S.runErr[key] ? esc(S.runErr[key]) : 'Ctrl + Enter to queue'}</span><button class="btn primary" data-run>Queue it</button></div></div>`;
+    }
+    const keep = $('#taskIn')?.value;
+    run.innerHTML = h;
+    if (keep && $('#taskIn')) $('#taskIn').value = keep;
+  }
+  if (mode === 'live'){
+    const log = S.logs[key] || [];
+    const m = /step (\d+) of (\d+)/.exec(a.step || '');
+    $('#pProg').parentNode.style.visibility = m ? 'visible' : 'hidden';
+    if (m) $('#pProg').style.width = (100 * m[1] / m[2]) + '%';
+  }
   // outputs
   const docs = (data().docs || []).filter(d => d.agent === a.name).sort((x, y) => y.mtime - x.mtime);
   $('#pDocs').innerHTML = `<p class="p-label">Outputs · ${docs.length}</p>` + (docs.length
@@ -867,7 +900,29 @@ $('#panel').addEventListener('click', async e => {
   if (t.closest('[data-back]')){ S.panel = { mode:'agent', agent:S.panel.agent }; S.headKey = ''; return render(); }
   const d = t.closest('[data-doc]');
   if (d){ S.panel = { mode:'doc', agent:S.panel.agent, doc:d.dataset.doc }; return renderPanel(); }
+  const key = S.focus + '/' + S.panel?.agent;
+  if (t.closest('[data-run]')) return startRun();
+  if (t.closest('[data-edit]')){ const task = S.fallback[key]; delete S.fallback[key]; S.runKey = ''; await renderPanel(); $('#taskIn').value = task; $('#taskIn').focus(); return; }
+  if (t.closest('[data-copy]')){
+    const btn = t.closest('[data-copy]');
+    try{ await navigator.clipboard.writeText($('#copyText').textContent); btn.textContent = 'Copied'; }
+    catch{ const r = document.createRange(); r.selectNodeContents($('#copyText')); getSelection().removeAllRanges(); getSelection().addRange(r); btn.textContent = 'Selected — press Ctrl+C'; }
+    setTimeout(() => { if (btn.isConnected) btn.textContent = 'Copy'; }, 2200);
+  }
 });
+$('#panel').addEventListener('keydown', e => { if (e.target.id === 'taskIn' && e.key === 'Enter' && (e.metaKey || e.ctrlKey)){ e.preventDefault(); startRun(); } });
+$('#panel').addEventListener('input', e => {
+  if (e.target.id !== 'taskIn') return;
+  const key = S.focus + '/' + S.panel.agent;
+  if (S.runErr[key]){ delete S.runErr[key]; const h = $('#runHint'); h.classList.remove('err'); h.textContent = '⌘/Ctrl + Enter to run'; S.runKey = S.runKey.replace(/:[^:]*$/, ':'); }
+});
+async function startRun(){
+  const name = S.panel.agent, key = S.focus + '/' + name, task = $('#taskIn').value.trim();
+  if (!task){ S.runErr[key] = 'Write a task first — one sentence is enough.'; S.runKey = ''; await renderPanel(); $('#taskIn').focus(); return; }
+  delete S.runErr[key]; if (S.justDone) delete S.justDone[key];
+  try { await api.run(S.focus, name, task); S.fallback[key] = task.replace(/\.$/, ''); S.runKey = ''; renderPanel(); announce('Queued. Run /board:run in Claude Code.'); }
+  catch(err){ S.runErr[key] = err.message; S.runKey = ''; renderPanel(); }
+}
 
 /* ================================================================
    SHEETS

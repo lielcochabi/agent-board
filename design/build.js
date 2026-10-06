@@ -65,12 +65,25 @@ rep(`catch(err){ setFieldError('fwPRoot', 'ePRoot', 'Couldn\\'t add it: ' + err.
 // 5. the stage no longer needs the mock-only global
 rep(`projects: [], all: {}, focus: 'jarvis', panel: null, launcherDown: false,`, `projects: [], all: {}, focus: 'jarvis', panel: null,`);
 
-// 6. no launch control: agents run from Claude Code; the board only follows them.
-rep('    POST /api/run   {project, agent, task}  -> 2xx = launched, anything else => copy-paste fallback\n    POST /api/stop  {project, agent}\n', '');
-rep(`<section class="p-sec" id="pRun" aria-label="Run"></section>`, '');
-cut('  // run control\n  const mode = ', '  // outputs\n', '');
-cut("  const key = S.focus + '/' + S.panel?.agent;\n  if (t.closest('[data-run]'))", '/* ================================================================\n   SHEETS', '});\n\n');
-rep("  async run(project, agent, task){ await post('/api/run', { project, agent, task }); },\n  async stop(project, agent){ await post('/api/stop', { project, agent }); },\n", '');
+// 6. Run control = "send to Claude Code": the board queues a request file; the plugin's /board:run runs it in the user's own session.
+rep("    POST /api/run   {project, agent, task}  -> 2xx = launched, anything else => copy-paste fallback\n    POST /api/stop  {project, agent}\n", '    POST /api/requests {project, agent, task} -> queues a request file; Claude Code runs it (/board:run)\n');
+rep("  async run(project, agent, task){ await post('/api/run', { project, agent, task }); },\n  async stop(project, agent){ await post('/api/stop', { project, agent }); },\n",
+    "  async run(project, agent, task){ return post('/api/requests', { project, agent, task }); },\n");
+rep('<button class="btn danger" data-stop>■ Stop</button>', '');
+rep("  if (t.closest('[data-stop]')) return api.stop(S.focus, S.panel.agent);\n", '');
+rep("<p class=\"p-label\">Run</p>", "<p class=\"p-label\">Send to Claude Code</p>");
+rep("⌘/Ctrl + Enter to run", "Ctrl + Enter to queue");
+rep(">Run</button></div></div>`;", ">Queue it</button></div></div>`;");
+rep("placeholder=\"What should it do?\"", "placeholder=\"What should it do? It is queued here and run by Claude Code.\"");
+// after queuing: show the queued view with the command (reuses the design's fallback panel)
+rep("<p>Launching from here isn't set up, so run it in Claude Code instead. Paste this:</p>", "<p>Queued. In your Claude Code session run <code>/board:run ${esc(a.name)}</code>, or paste this sentence instead:</p>");
+rep("try { await api.run(S.focus, name, task); }\n  catch(err){ S.fallback[key] = task.replace(/\\.$/, ''); S.runKey = ''; renderPanel(); announce('Launcher unavailable. Copy the sentence into Claude Code.'); }",
+    "try { await api.run(S.focus, name, task); S.fallback[key] = task.replace(/\\.$/, ''); S.runKey = ''; renderPanel(); announce('Queued. Run /board:run in Claude Code.'); }\n  catch(err){ S.runErr[key] = err.message; S.runKey = ''; renderPanel(); }");
+// the demo's fake progress stream has no real data behind it
+rep("<ul class=\"stream\" id=\"pStream\" aria-live=\"polite\"></ul>", '');
+rep("    $('#pStream').innerHTML = log.map((s, i) => `<li class=\"${i === log.length - 1 ? 'now' : ''}\">${esc(s)}</li>`).join('');\n    $('#pStream').scrollTop = 1e6;\n", '');
+// pending requests shown with the other facts
+rep("${a.missions ? `<dt>Missions</dt><dd>${a.missions} waiting</dd>` : ''}</dl>`;", "${a.missions ? `<dt>Missions</dt><dd>${a.missions} waiting</dd>` : ''}${a.requests ? `<dt>Queued</dt><dd>${a.requests} request${a.requests > 1 ? 's' : ''} waiting for Claude Code</dd>` : ''}</dl>`;");
 
 fs.mkdirSync(path.join(__dirname, '..', 'public'), { recursive: true });
 fs.writeFileSync(path.join(__dirname, '..', 'public', 'index.html'), t);

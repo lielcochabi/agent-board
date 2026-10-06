@@ -1,0 +1,7 @@
+{
+  "name": "board",
+  "version": "0.2.0",
+  "description": "Agent Board: a live local board of your Claude Code agents across projects. Queue a run from the board and Claude Code runs it in your own session.",
+  "author": { "name": "Liel" },
+  "keywords": ["agents", "dashboard", "subagents", "status"]
+}
