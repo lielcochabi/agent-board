@@ -38,6 +38,7 @@ const api = {
   async getAgent(project, name){ return j('/api/agent?project=' + encodeURIComponent(project) + '&name=' + encodeURIComponent(name)); },
   async updateAgent(project, a){ await post('/api/agents/update', { project, ...a }); },
   async removeAgent(project, name){ await post('/api/agents/remove', { project, name }); },
+  async redrawIcon(project, name, brief){ await post('/api/agents/icon', { project, name, brief }); },
   async createProject(p){ return (await post('/api/projects', p)).id; }
 };
 

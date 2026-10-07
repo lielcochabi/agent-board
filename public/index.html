@@ -176,6 +176,16 @@ button{cursor:pointer}
 [data-state="running"] .emb .a,[data-state="blocked"] .emb .a{animation-duration:var(--dur,3s);animation-iteration-count:infinite;animation-timing-function:linear}
 [data-state="blocked"] .emb .a{animation-play-state:paused}
 .emb .o{transform-box:fill-box;transform-origin:center}
+/* drawn emblems: a small shared motion vocabulary (see icon-spec.md) */
+.emb .k-spin{animation-name:spin}
+.emb .k-pulse{animation-name:lamp}
+.emb .k-bob{animation-name:bob}
+.emb .k-wave{animation-name:wave}
+.emb .k-ping{animation-name:ping}
+.emb .k-draw{animation-name:tick}
+.emb .k-flash{animation-name:blink}
+@keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
+
 .emb .c{transform-origin:32px 32px}
 /* scout */
 .sweep{animation-name:spin;--dur:3s}
@@ -333,7 +343,6 @@ dialog.sheet[open]{animation:sheetIn .24s var(--ease)}
 .seg label:last-child span{border-right:none}
 .seg input:checked+span{background:var(--signal-soft);color:var(--ink)}
 .seg input:focus-visible+span{outline:2px solid var(--focus);outline-offset:-2px}
-.picker{display:grid;grid-template-columns:repeat(auto-fill,minmax(64px,1fr));gap:8px}
 .pick{--size:36px;display:grid;justify-items:center;gap:6px;padding:10px 4px 8px;border:1px solid var(--line);border-radius:var(--r-md);background:var(--bay);font:400 11px/1 var(--mono);color:var(--ink-3)}
 .pick:hover,.pick:focus-visible{color:var(--ink)}
 .pick[aria-checked="true"]{border-color:var(--signal);color:var(--ink);box-shadow:inset 0 0 0 1px var(--signal)}
@@ -441,9 +450,9 @@ dialog.sheet[open]{animation:sheetIn .24s var(--ease)}
         </div>
         <span class="help mono" id="typeHelp"></span>
       </div>
-      <div class="field"><span class="lbl" id="embLbl">Appearance</span>
-        <div class="picker" id="picker" role="radiogroup" aria-labelledby="embLbl"></div>
-        <span class="help">Stored as <code class="mono">emblem</code>. It never changes on its own.</span>
+      <div class="field"><label for="fIcon" id="iconLbl">Icon <span class="opt">· optional</span></label>
+        <input id="fIcon" maxlength="500" placeholder="Describe the icon you want, or leave empty and Claude draws one from the goal">
+        <span class="help" id="iconHelp">Claude draws a small animated emblem for the agent the first time it runs, or when you run <code class="mono">/board:icons</code>. Until then it shows a plain orb. You can ask for a new one any time.</span>
       </div>
       <details class="adv" id="advanced">
         <summary>Advanced</summary>
@@ -513,6 +522,7 @@ const api = {
   async getAgent(project, name){ return j('/api/agent?project=' + encodeURIComponent(project) + '&name=' + encodeURIComponent(name)); },
   async updateAgent(project, a){ await post('/api/agents/update', { project, ...a }); },
   async removeAgent(project, name){ await post('/api/agents/remove', { project, name }); },
+  async redrawIcon(project, name, brief){ await post('/api/agents/icon', { project, name, brief }); },
   async createProject(p){ return (await post('/api/projects', p)).id; }
 };
 
@@ -529,6 +539,8 @@ function emitChange(){ clearTimeout(refetchTimer); refetchTimer = setTimeout(ref
    outer frame r=30, job loop on elements with class "a".
    ================================================================ */
 let UID = 0;
+const CUSTOM = {};
+const svgKey = (pid, a) => { let h = 0; for (const c of a.emblemSvg) h = (h * 31 + c.charCodeAt(0)) | 0; return 'svg:' + pid + '/' + a.name + ':' + h; };
 function hexPath(cx, cy, r){
   const p = [];
   for (let i = 0; i < 6; i++){ const t = Math.PI / 180 * (60 * i - 90); p.push((cx + r * Math.cos(t)).toFixed(2) + ' ' + (cy + r * Math.sin(t)).toFixed(2)); }
@@ -536,6 +548,7 @@ function hexPath(cx, cy, r){
 }
 function emblemSVG(kind){
   const id = 'emb' + (++UID);
+  if (typeof kind === 'string' && kind.startsWith('svg:')) return `<svg class="emb" viewBox="0 0 64 64" aria-hidden="true" focusable="false"><circle class="frame" cx="32" cy="32" r="30"/>${CUSTOM[kind] || ''}</svg>`;
   let g = '';
   switch (kind){
   case 'scout': g = `
@@ -622,7 +635,7 @@ const embWrap = (kind, state) => `<span class="emb-wrap"${state ? ` data-state="
    ================================================================ */
 const S = {
   projects: [], all: {}, focus: 'jarvis', panel: null,
-  logs: {}, justDone: {}, fallback: {}, runErr: {}, confirmRemove: null, flash: {}, prevStates: {}, lastFocusEl: null, runKey: ''
+  logs: {}, justDone: {}, fallback: {}, runErr: {}, confirmRemove: null, iconEdit: null, flash: {}, prevStates: {}, lastFocusEl: null, runKey: ''
 };
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -668,6 +681,7 @@ async function refetch(){
   if (!project(S.focus) && S.projects[0]) S.focus = S.projects[0].id;
   for (const [pid, st] of Object.entries(S.all)){
     for (const a of st.agents){
+      if (a.emblemSvg){ const k = svgKey(pid, a); CUSTOM[k] = a.emblemSvg; a.emblem = k; }
       const key = pid + '/' + a.name, prev = S.prevStates[key];
       const log = S.logs[key] = S.logs[key] || (a.log ? [...a.log] : []);
       if (a.state === 'running' && a.step && log[log.length - 1] !== a.step) log.push(a.step);
@@ -875,7 +889,7 @@ async function renderPanel(){
     <dt>State</dt><dd><span class="state-pill" data-state="${a.state}">${STATE_WORD[a.state]}</span></dd>
     <dt>Task</dt><dd>${a.task ? esc(a.task) : '<span class="muted">No task yet</span>'}</dd>
     <dt>Step</dt><dd class="step">${a.step ? esc(a.step) : '<span class="muted">—</span>'}</dd>
-    <dt>Updated</dt><dd class="mono" style="font-size:13px" title="${abs(a.updated)}">${ago(a.updated)}</dd>
+    <dt>Updated</dt><dd class="mono" style="font-size:13px" title="${a.updated ? abs(a.updated) : ''}">${a.updated ? ago(a.updated) : '—'}</dd>
     <dt>Type</dt><dd>${esc(a.type || '—')}</dd>
     ${a.missions ? `<dt>Missions</dt><dd>${a.missions} waiting</dd>` : ''}${a.requests ? `<dt>Queued</dt><dd>${a.requests} request${a.requests > 1 ? 's' : ''} waiting for Claude Code</dd>` : ''}</dl>`;
   // run control
@@ -916,9 +930,15 @@ async function renderPanel(){
     : `<p class="muted">Nothing written yet. Outputs appear here as ${esc(a.name)} saves them.</p>`);
   // manage: edit / remove (remove asks first and only moves files aside)
   const busy = a.state === 'running';
+  const iconNote = a.iconPending ? `<p class="muted" style="margin-top:8px">Its icon is waiting to be drawn. That happens the first time ${esc(a.name)} runs, or when you run <code>/board:icons</code> in Claude Code.</p>`
+    : a.iconError ? `<p class="muted" style="margin-top:8px">The icon Claude drew was rejected (${esc(a.iconError)}). Ask for a redraw.</p>`
+    : a.iconRequested ? `<p class="muted" style="margin-top:8px">A new icon is waiting to be drawn. Run <code>/board:icons</code> in Claude Code.</p>` : '';
+  const iconUi = S.iconEdit === key ? `<div class="field" style="margin-top:12px"><label for="iconIn">Describe the icon you want</label><textarea id="iconIn" rows="2" maxlength="500" placeholder="e.g. a lighthouse with a pulsing beam. Leave empty for a fresh idea."></textarea><div class="manage"><button class="btn primary" data-icon-send>Ask Claude to draw it</button><button class="btn ghost" data-icon-cancel>Cancel</button></div></div>` : '';
+  const keepIcon = $('#iconIn')?.value;
   $('#pManage').innerHTML = S.confirmRemove === key
     ? `<p class="p-label">Remove ${esc(a.name)}?</p><p class="muted">Its definition, job description and status file move to <code>agent-removed/</code> in the project. Outputs and commits stay.</p><div class="manage"><button class="btn danger" data-remove-yes>Remove</button><button class="btn ghost" data-remove-no>Cancel</button></div>`
-    : `<p class="p-label">Manage</p><div class="manage"><button class="btn" data-edit-agent ${a.editable === false ? 'disabled' : ''}>Edit agent</button><button class="btn danger" data-remove ${busy ? 'disabled' : ''}>Remove</button></div>${a.editable === false ? `<p class="muted" style="margin-top:8px">Written by hand, so the board will not overwrite it. Edit <code>.claude/agents/${esc(a.name)}.md</code> instead.</p>` : ''}${busy ? `<p class="muted" style="margin-top:8px">Running now. Remove it once it has finished.</p>` : ''}`;
+    : `<p class="p-label">Manage</p><div class="manage"><button class="btn" data-edit-agent ${a.editable === false ? 'disabled' : ''}>Edit agent</button><button class="btn" data-icon-redraw>Redraw icon</button><button class="btn danger" data-remove ${busy ? 'disabled' : ''}>Remove</button></div>${iconUi}${iconNote}${a.editable === false ? `<p class="muted" style="margin-top:8px">Written by hand, so the board will not overwrite it. Edit <code>.claude/agents/${esc(a.name)}.md</code> instead.</p>` : ''}${busy ? `<p class="muted" style="margin-top:8px">Running now. Remove it once it has finished.</p>` : ''}`;
+  if (keepIcon && $('#iconIn')) $('#iconIn').value = keepIcon;
 }
 $('#panel').addEventListener('click', async e => {
   const t = e.target;
@@ -927,6 +947,13 @@ $('#panel').addEventListener('click', async e => {
   const d = t.closest('[data-doc]');
   if (d){ S.panel = { mode:'doc', agent:S.panel.agent, doc:d.dataset.doc }; return renderPanel(); }
   const key = S.focus + '/' + S.panel?.agent;
+  if (t.closest('[data-icon-redraw]')){ S.iconEdit = key; await renderPanel(); return $('#iconIn')?.focus(); }
+  if (t.closest('[data-icon-cancel]')){ S.iconEdit = null; return renderPanel(); }
+  if (t.closest('[data-icon-send]')){
+    const brief = $('#iconIn').value.trim(), name = S.panel.agent; S.iconEdit = null;
+    try{ await api.redrawIcon(S.focus, name, brief); }catch(err){ return toast(esc(err.message)); }
+    renderPanel(); toast(`Asked Claude for a new icon for <code>${esc(name)}</code>. Run <code>/board:icons</code> in Claude Code, or it draws it the next time ${esc(name)} runs.`); return;
+  }
   if (t.closest('[data-edit-agent]')) return openAgentSheet(S.panel.agent);
   if (t.closest('[data-remove]')){ S.confirmRemove = key; return renderPanel(); }
   if (t.closest('[data-remove-no]')){ S.confirmRemove = null; return renderPanel(); }
@@ -962,13 +989,12 @@ async function startRun(){
    SHEETS
    ================================================================ */
 const TYPE_HELP = { Researcher:'Tools: Read, Grep, Glob, Bash, WebSearch, WebFetch, Write · writes notes to its docs folder', Reviewer:'Tools: Read, Grep, Glob, Bash, Write · writes review notes only, no code edits', Builder:'Tools: Read, Grep, Glob, Bash, Write, Edit · can change project files inside its scope' };
-let pickedEmblem = 'orb';
 function setFieldError(wrapId, errId, msg){ const w = $('#' + wrapId); w.classList.toggle('bad', !!msg); if (msg && errId) $('#' + errId).textContent = msg; w.querySelector('input,textarea')?.setAttribute('aria-invalid', String(!!msg)); return !msg; }
 let editing = null; // agent name while the sheet is in edit mode
 const SHEET_FIELDS = ['fwName', 'fwGoal', 'fwPrompt'];
 function syncCustom(){ $('#fwPrompt').hidden = !$('#fCustom').checked; }
 async function openAgentSheet(editName){
-  const f = $('#agentForm'); f.reset(); pickedEmblem = 'orb'; editing = editName || null;
+  const f = $('#agentForm'); f.reset(); editing = editName || null;
   SHEET_FIELDS.forEach(id => setFieldError(id));
   $('#agentSheetTitle').textContent = editing ? 'Edit ' + editing : 'New agent';
   $('#agentSubmit').textContent = editing ? 'Save changes' : 'Create agent';
@@ -982,29 +1008,15 @@ async function openAgentSheet(editName){
       $('#fRole').value = a.role || ''; $('#fWhen').value = a.when || ''; $('#fScope').value = a.scope || '';
       $('#fExtra').value = a.extra || ''; $('#fCustom').checked = !!a.custom; $('#fPrompt').value = a.prompt || '';
       const r = document.querySelector(`input[name=type][value="${a.type}"]`); if (r) r.checked = true;
-      pickedEmblem = a.emblem || 'orb';
       $('#advanced').open = !!(a.custom || a.extra || a.role || a.when);
       syncCustom();
     } catch(err){ return toast(esc(err.message)); }
   }
-  $('#picker').innerHTML = EMBLEMS.map(k => `<button type="button" class="pick" role="radio" data-emb="${k}" aria-checked="${k === pickedEmblem}" tabindex="${k === pickedEmblem ? 0 : -1}">${embWrap(k, 'still')}<span>${k}</span></button>`).join('');
+  $('#fIcon').value = '';
+  $('#iconLbl').innerHTML = editing ? 'New icon <span class="opt">· optional, leave empty to keep the current one</span>' : 'Icon <span class="opt">· optional</span>';
   $('#typeHelp').textContent = TYPE_HELP[document.querySelector('input[name=type]:checked').value];
   $('#agentSheet').showModal(); (editing ? $('#fGoal') : $('#fName')).focus();
 }
-function selectEmblem(k, focus){
-  pickedEmblem = k;
-  document.querySelectorAll('.pick').forEach(b => { const on = b.dataset.emb === k; b.setAttribute('aria-checked', on); b.tabIndex = on ? 0 : -1; if (on && focus) b.focus(); });
-}
-const picker = $('#picker');
-picker.addEventListener('click', e => { const b = e.target.closest('.pick'); if (b) selectEmblem(b.dataset.emb); });
-picker.addEventListener('keydown', e => {
-  const dir = { ArrowRight:1, ArrowDown:1, ArrowLeft:-1, ArrowUp:-1 }[e.key]; if (!dir) return;
-  e.preventDefault(); const i = EMBLEMS.indexOf(pickedEmblem); selectEmblem(EMBLEMS[(i + dir + EMBLEMS.length) % EMBLEMS.length], true);
-});
-const hoverOn = e => { const b = e.target.closest('.pick'); if (b) b.querySelector('.emb-wrap').dataset.state = 'running'; };
-const hoverOff = e => { const b = e.target.closest('.pick'); if (b && !b.contains(e.relatedTarget)) b.querySelector('.emb-wrap').dataset.state = 'still'; };
-picker.addEventListener('mouseover', hoverOn); picker.addEventListener('mouseout', hoverOff);
-picker.addEventListener('focusin', hoverOn); picker.addEventListener('focusout', hoverOff);
 $('#agentForm').addEventListener('change', e => {
   if (e.target.name === 'type') $('#typeHelp').textContent = TYPE_HELP[e.target.value];
   if (e.target.id === 'fCustom'){ syncCustom(); if (e.target.checked){ $('#advanced').open = true; $('#fPrompt').focus(); } }
@@ -1020,15 +1032,18 @@ $('#agentForm').addEventListener('submit', async e => {
   const okP = !custom || setFieldError('fwPrompt', 'ePrompt', prompt.length >= 10 ? '' : 'Write the prompt, or switch this off.');
   if (!(okN && okG && okP)){ if (!okP) $('#advanced').open = true; return $('#agentSheet .field.bad input, #agentSheet .field.bad textarea').focus(); }
   const body = {
-    name, goal, how: $('#fHow').value.trim(), type: new FormData(e.target).get('type'), emblem: pickedEmblem,
+    name, goal, how: $('#fHow').value.trim(), type: new FormData(e.target).get('type'), iconBrief: $('#fIcon').value.trim(),
     role: $('#fRole').value.trim(), when: $('#fWhen').value.trim(), scope: $('#fScope').value.trim(), extra: $('#fExtra').value.trim(), custom, prompt
   };
-  try{ await (editing ? api.updateAgent(pid, body) : api.createAgent(pid, body)); }
+  try{
+    await (editing ? api.updateAgent(pid, body) : api.createAgent(pid, body));
+    if (editing && body.iconBrief) await api.redrawIcon(pid, name, body.iconBrief);
+  }
   catch(err){ return setFieldError(editing ? 'fwGoal' : 'fwName', editing ? 'eGoal' : 'eName', err.message); }
   $('#agentSheet').close();
   if (pid !== S.focus) focusProject(pid);
   if (editing){ S.headKey = ''; toast(`Saved <code>${esc(name)}</code>. The new instructions apply the next time it runs.`); }
-  else toast(`Created <code>.claude/agents/${esc(name)}.md</code> — in Claude Code, say <code>Use the ${esc(name)} agent to …</code>`);
+  else toast(`Created <code>${esc(name)}</code>. In Claude Code say <code>Use the ${esc(name)} agent to …</code>. It draws its own icon the first time it runs.`);
 });
 function openProjectSheet(){
   $('#projectForm').reset(); ['fwPName','fwPRoot'].forEach(id => setFieldError(id));

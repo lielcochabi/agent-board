@@ -6,6 +6,7 @@ Local web app (no dependencies, Node 18+) for managing AI agents across several 
 - **Stage:** the focused project's agents as animated emblems. Active agents sit forward; idle ones stand by.
 - **Agent panel:** current task and step and the agent's output documents rendered as text. Commits are behind the Commits button. The panel has a task box: it queues a run request, and Claude Code runs it in your own session (see Claude Code plugin). The board itself never starts anything.
 - **Create:** "New agent" asks for a name, a **goal** and (optionally) **how it works**, plus what it may do (Researcher, Reviewer or Builder) and an emblem. Everything else comes from `agent-template.md`: edit that one file to change the rules every new agent gets. "Advanced" adds role, when-to-use, write scope and extra rules, or lets you write the whole prompt yourself. "+" adds a project folder.
+- **Icons:** there is no icon library. Each new agent draws its own small animated emblem, based on its goal (or on a description you typed). The board writes `agent-emblems/<name>.request.md`, a self-contained brief generated from `icon-spec.md`; the agent follows it the first time it runs, or `/board:icons` does it for every waiting agent. The result is `agent-emblems/<name>.svg`. Until then the agent shows a plain orb. "Redraw icon" in the panel asks for a new one with your own description. Because the SVG is written by a model, the server only accepts a strict whitelist (fixed shapes, `currentColor`, a small set of animation classes, `viewBox="0 0 64 64"`) and rebuilds it from validated parts, so a drawn icon can never carry script, links or images. A rejected file shows the reason in the panel. Agents created before this change keep their old library emblem until you redraw them.
 - **Edit / Remove:** the agent panel has Edit agent (reopens the form with the saved values and rewrites its files) and Remove (asks first; moves the definition, prompt and status file to `agent-removed/` in the project, so nothing is lost; outputs and commits stay). Agents written by hand are never overwritten: Edit is off for them.
 - **Live:** changes on disk are pushed to the page over Server-Sent Events.
 
@@ -36,6 +37,7 @@ For each registered project folder:
 | `.claude/agents/*.md` | the agents (name, role from the description, tools decide the type) |
 | `agent-status/<agent>.md` | live state: `state`, `task`, `step`, `updated`, `output` |
 | `agent-missions/<agent>-*.md` | waiting missions |
+| `agent-emblems/<agent>.svg`, `<agent>.request.md` | the agent's drawn emblem and the pending request for one |
 | `agent-requests/<agent>-*.md` | run requests queued from the board (moved to `done/` by `/board:run`) |
 | `docs/**` | outputs, attributed to an agent by first sub-folder name |
 

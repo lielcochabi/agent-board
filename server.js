@@ -105,9 +105,12 @@ function readAgents(p) {
     const statusFile = path.join(statusDir(p), `${name}.md`);
     try { s = parseStatus(fs.readFileSync(statusFile, 'utf8')); mt = fs.statSync(statusFile).mtimeMs; } catch {}
     const parsed = Date.parse(s.updated), meta = (p.meta || {})[name] || {};
+    const icon = meta.emblem === 'custom' ? readEmblem(p, name) : {};
     const role = (fm.description || '').split('.')[0].slice(0, 60);
     const dash = v => (v && v !== '-' ? v : '');
-    return { name, role, emblem: meta.emblem || (EMBLEMS.includes(name) ? name : 'orb'), type: meta.type || agentType(fm.tools),
+    return { name, role, emblem: meta.emblem && meta.emblem !== 'custom' ? meta.emblem : EMBLEMS.includes(name) && !meta.emblem ? name : 'orb',
+             emblemSvg: icon.svg || '', iconError: icon.error || '', iconPending: meta.emblem === 'custom' && !icon.svg,
+             iconRequested: fs.existsSync(iconRequestFile(p, name)), type: meta.type || agentType(fm.tools),
              state: (s.state || 'idle').toLowerCase(), task: dash(s.task), step: dash(s.step),
              updated: mt || (isNaN(parsed) ? 0 : parsed), output: dash(s.output),
              editable: !!meta.goal,
@@ -171,6 +174,119 @@ const RESERVED = ['claude', 'explore', 'plan', 'general-purpose', 'statusline-se
 const clean = (s, max) => String(s == null ? '' : s).replace(/[\r\n\t]+/g, ' ').trim().slice(0, max);
 const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30);
 
+// ---------- custom emblems ----------
+// An agent draws its own emblem (agent-emblems/<name>.svg) following the request the board writes next to it.
+// The file is untrusted text, so it is parsed against a whitelist and rebuilt from validated pieces before it reaches the page.
+const ICON_SPEC_FILE = path.join(__dirname, 'icon-spec.md');
+const emblemsDir = p => path.join(p.root, 'agent-emblems');
+const ICON_CLASSES = new Set(['ln', 'faint', 'fill', 'frame', 'wedge', 'a', 'o', 'c', 'draw', 'k-spin', 'k-pulse', 'k-bob', 'k-wave', 'k-ping', 'k-draw', 'k-flash']);
+const ICON_TAGS = new Set(['g', 'path', 'circle', 'ellipse', 'rect', 'line', 'polyline', 'polygon']);
+const isNum = v => /^-?\d*\.?\d+$/.test(v);
+const ICON_ATTRS = {
+  d: v => v.length < 1500 && /^[MmLlHhVvCcSsQqTtAaZz0-9eE.,\s-]+$/.test(v),
+  points: v => v.length < 800 && /^[0-9.,\s-]+$/.test(v),
+  fill: v => v === 'none' || v === 'currentColor',
+  stroke: v => v === 'none' || v === 'currentColor',
+  'stroke-linecap': v => ['round', 'butt', 'square'].includes(v),
+  'stroke-linejoin': v => ['round', 'miter', 'bevel'].includes(v),
+  'stroke-dasharray': v => /^[0-9.\s,]+$/.test(v),
+  transform: v => /^(?:(?:translate|rotate|scale)\([-\d.,\s]+\)\s*)+$/.test(v),
+  class: v => v.trim().split(/\s+/).every(c => ICON_CLASSES.has(c)),
+  style: v => /^(?:\s*--(?:dl|dur)\s*:\s*\d*\.?\d+s\s*;?)+\s*$/.test(v),
+};
+for (const n of ['cx', 'cy', 'r', 'rx', 'ry', 'x', 'y', 'width', 'height', 'x1', 'y1', 'x2', 'y2', 'stroke-width', 'opacity', 'fill-opacity', 'stroke-opacity', 'pathLength']) ICON_ATTRS[n] = isNum;
+
+function sanitizeEmblem(text) {
+  text = String(text || '').trim();
+  if (!text) return { error: 'the icon file is empty' };
+  if (text.length > 8000) return { error: 'the icon file is larger than 8 KB' };
+  if (/<[!?]/.test(text)) return { error: 'comments and doctype lines are not allowed' };
+  const tagRe = /<(\/?)([A-Za-z][\w-]*)([^<>]*?)(\/?)>/g;
+  let m, last = 0, out = '', count = 0, rooted = false, done = false;
+  const stack = [];
+  while ((m = tagRe.exec(text))) {
+    if (text.slice(last, m.index).trim()) return { error: 'text inside the icon is not allowed' };
+    last = tagRe.lastIndex;
+    const close = m[1] === '/', tag = m[2].toLowerCase(), attrText = m[3], selfClose = m[4] === '/';
+    if (done) return { error: 'content after the closing svg tag' };
+    if (close) {
+      if (attrText.trim() || !stack.length || stack.pop() !== tag) return { error: 'mismatched tags' };
+      if (tag === 'svg') done = true; else out += `</${tag}>`;
+      continue;
+    }
+    if (!rooted) {
+      if (tag !== 'svg' || selfClose) return { error: 'the icon must be one <svg> element' };
+      const vb = /viewBox\s*=\s*"([^"]*)"/.exec(attrText);
+      if (!vb || vb[1].trim().split(/[\s,]+/).join(' ') !== '0 0 64 64') return { error: 'the icon must use viewBox="0 0 64 64"' };
+      rooted = true; stack.push('svg');
+      continue;
+    }
+    if (!ICON_TAGS.has(tag)) return { error: `<${tag}> is not allowed` };
+    if (++count > 80) return { error: 'more than 80 shapes' };
+    if (stack.length > 4) return { error: 'groups nested too deeply' };
+    const attrRe = /\s+([A-Za-z][\w:-]*)\s*=\s*"([^"]*)"/y;
+    let pos = 0, attrs = '';
+    while (pos < attrText.length && attrText.slice(pos).trim()) {
+      attrRe.lastIndex = pos;
+      const a = attrRe.exec(attrText);
+      if (!a) return { error: 'a malformed attribute' };
+      const check = ICON_ATTRS[a[1]];
+      if (!check || !check(a[2])) return { error: `attribute ${a[1]} is not allowed or has a bad value` };
+      attrs += ` ${a[1]}="${a[2]}"`;
+      pos = attrRe.lastIndex;
+    }
+    out += `<${tag}${attrs}${selfClose ? '/' : ''}>`;
+    if (!selfClose) stack.push(tag);
+  }
+  if (text.slice(last).trim()) return { error: 'text inside the icon is not allowed' };
+  if (!rooted || !done || stack.length) return { error: 'the svg element is not closed' };
+  return { svg: out };
+}
+
+function readEmblem(p, name) {
+  let raw;
+  try { raw = fs.readFileSync(path.join(emblemsDir(p), `${name}.svg`), 'utf8'); } catch { return {}; }
+  return sanitizeEmblem(raw);
+}
+const iconRequestFile = (p, name) => path.join(emblemsDir(p), `${name}.request.md`);
+
+function writeIconRequest(p, name, role, goal, brief) {
+  let tpl;
+  try { tpl = fs.readFileSync(ICON_SPEC_FILE, 'utf8'); } catch { return { error: 'icon-spec.md is missing next to the server.' }; }
+  const win = path.win32;
+  const text = fill(tpl, {
+    name, role, goal,
+    brief: brief || '(none: choose a fitting visual metaphor from the role and goal)',
+    svgFile: win.join(p.root, 'agent-emblems', `${name}.svg`),
+    doneDir: win.join(p.root, 'agent-emblems', 'done'),
+    requestFile: win.join(p.root, 'agent-emblems', `${name}.request.md`),
+  });
+  try {
+    fs.mkdirSync(emblemsDir(p), { recursive: true });
+    fs.writeFileSync(iconRequestFile(p, name), text);
+  } catch (e) { return { error: `Could not write the icon request: ${e.code || e.message}` }; }
+  watch(emblemsDir(p));
+  return { ok: true };
+}
+
+// Ask Claude for a (new) icon. The old one stays until a new file replaces it.
+function redrawIcon(b) {
+  const p = getProject(clean(b.project, 60));
+  if (!p) return { error: 'Pick a project first.' };
+  const name = clean(b.name, 40);
+  const defPath = path.join(agentsDir(p), `${name}.md`);
+  if (!validName(name) || !fs.existsSync(defPath)) return { error: `There is no agent named "${name}" in ${p.name}.` };
+  const fm = parseFrontmatter(fs.readFileSync(defPath, 'utf8'));
+  const m = (p.meta || {})[name] || {};
+  const role = m.role || (fm.description || '').split('.')[0] || name;
+  const r = writeIconRequest(p, name, role, m.goal || fm.description || role, clean(b.brief, 500));
+  if (r.error) return r;
+  p.meta = p.meta || {};
+  p.meta[name] = { ...m, emblem: 'custom' };
+  saveProjects(); broadcast();
+  return { ok: true, command: '/board:icons' };
+}
+
 // Every new agent starts from agent-template.md. Only its goal, its way of working and a few optional extras change.
 const TEMPLATE_FILE = path.join(__dirname, 'agent-template.md');
 const fill = (tpl, vars) => tpl.replace(/\{\{(\w+)\}\}/g, (m, k) => (k in vars ? vars[k] : m));
@@ -190,7 +306,7 @@ function agentFields(b, name) {
     role: clean(b.role, 80) || clean(goal, 60).replace(/[.\s]+$/, ''),
     when: clean(b.when, 300) || clean(goal, 200),
     scope: clean(b.scope, 200) || `docs/${name}/ and agent-missions/`,
-    emblem: EMBLEMS.includes(b.emblem) ? b.emblem : 'orb',
+    emblem: 'custom',
   };
 }
 
@@ -200,6 +316,7 @@ function agentFiles(p, name, f) {
   const promptPath = win.join(root, 'agent-prompts', `${name}.md`);
   const statusPath = win.join(root, 'agent-status', `${name}.md`);
   const defPath = path.join(agentsDir(p), `${name}.md`);
+  const requestPath = win.join(root, 'agent-emblems', `${name}.request.md`);
   let prompt;
   if (f.custom) prompt = f.prompt + '\n';
   else {
@@ -235,7 +352,8 @@ You are ${NAME} (${f.role}) for the ${p.name} project, launched as a subagent by
    - If you stop for any reason, set \`state: blocked\` or \`state: failed\` with the reason in \`step\`.
    - Your last tool call before the final report must set \`state: done\` with \`output\` set. Do not report finished until this write is done.
 4. Other agents may run in parallel in the same checkout. Your write scope is ${f.scope}. When committing, stage and commit only your own files by explicit path, never \`git add -A\`. Never push.
-5. Finish with a short report: what you did and how, what is unverified, and any mission file you wrote for another agent.
+5. **Your emblem:** if \`${requestPath}\` exists, you have not drawn your own icon yet. Before your main task, read that file and follow it. It is a short one-time drawing job, and it is the only time you may write outside your scope.
+6. Finish with a short report: what you did and how, what is unverified, and any mission file you wrote for another agent.
 `;
   return { prompt, def, promptPath, statusPath, defPath };
 }
@@ -263,6 +381,7 @@ function createAgent(b) {
     fs.writeFileSync(files.statusPath, 'state: idle\ntask: -\nstep: -\nupdated: -\noutput: -\n', { flag: 'wx' });
     p.meta = p.meta || {}; p.meta[name] = metaOf(f); saveProjects();
   } catch (e) { return { error: `Could not write the agent files: ${e.code || e.message}` }; }
+  writeIconRequest(p, name, f.role, f.goal, clean(b.iconBrief, 500));
   return { ok: true, name, project: p.id, root: p.root, files: [files.defPath, files.promptPath, files.statusPath] };
 }
 
@@ -288,6 +407,7 @@ function updateAgent(b) {
   if (r.error) return r;
   const f = agentFields(b, r.name);
   if (f.error) return f;
+  f.emblem = r.m.emblem || 'custom'; // editing never changes the icon; use Redraw icon for that
   const files = agentFiles(r.p, r.name, f);
   if (files.error) return files;
   try {
@@ -311,7 +431,7 @@ function removeAgent(b) {
   const dest = path.join(p.root, 'agent-removed', `${name}-${new Date().toISOString().replace(/[-:]/g, '').replace(/\..*/, '')}`);
   try {
     fs.mkdirSync(dest, { recursive: true });
-    for (const src of [defPath, path.join(promptsDir(p), `${name}.md`), path.join(statusDir(p), `${name}.md`)]) {
+    for (const src of [defPath, path.join(promptsDir(p), `${name}.md`), path.join(statusDir(p), `${name}.md`), path.join(emblemsDir(p), `${name}.svg`), iconRequestFile(p, name)]) {
       if (fs.existsSync(src)) fs.renameSync(src, path.join(dest, path.basename(path.dirname(src)) + '-' + path.basename(src)));
     }
     if (p.meta) delete p.meta[name];
@@ -374,7 +494,7 @@ function watch(dir, recursive = true) {
   try { fs.watch(dir, { recursive }, () => broadcast()); watched.add(dir); } catch {}
 }
 function watchProject(p) {
-  [statusDir(p), agentsDir(p), requestsDir(p), ...p.outputs.map(o => o.dir)].forEach(d => watch(d));
+  [statusDir(p), agentsDir(p), requestsDir(p), emblemsDir(p), ...p.outputs.map(o => o.dir)].forEach(d => watch(d));
   (p.files || []).forEach(f => watch(path.dirname(f.file), false));
   watch(p.root, false); // catches output folders being created later
 }
@@ -406,7 +526,7 @@ http.createServer((req, res) => {
     if (!originOk(req)) return json(res, { error: 'Request blocked.' }, 403);
     return readBody(req, body => {
       if (!body) return json(res, { error: 'Bad request.' }, 400);
-      const act = { '/api/agents': createAgent, '/api/agents/update': updateAgent, '/api/agents/remove': removeAgent }[url.pathname];
+      const act = { '/api/agents': createAgent, '/api/agents/update': updateAgent, '/api/agents/remove': removeAgent, '/api/agents/icon': redrawIcon }[url.pathname];
       if (act) { const r = act(body); return json(res, r, r.error ? 400 : 200); }
       if (url.pathname === '/api/projects') { const r = createProject(body); return json(res, r, r.error ? 400 : 200); }
       if (url.pathname === '/api/requests') { const r = createRequest(body); return json(res, r, r.error ? 400 : 200); }
