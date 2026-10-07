@@ -110,6 +110,7 @@ function readAgents(p) {
     return { name, role, emblem: meta.emblem || (EMBLEMS.includes(name) ? name : 'orb'), type: meta.type || agentType(fm.tools),
              state: (s.state || 'idle').toLowerCase(), task: dash(s.task), step: dash(s.step),
              updated: mt || (isNaN(parsed) ? 0 : parsed), output: dash(s.output),
+             editable: !!meta.goal,
              missions: missionFiles.filter(m => m.toLowerCase().startsWith(name + '-')).length,
              requests: requestFiles.filter(m => m.toLowerCase().startsWith(name + '-')).length };
   });
@@ -170,56 +171,54 @@ const RESERVED = ['claude', 'explore', 'plan', 'general-purpose', 'statusline-se
 const clean = (s, max) => String(s == null ? '' : s).replace(/[\r\n\t]+/g, ' ').trim().slice(0, max);
 const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30);
 
-function createAgent(b) {
-  const p = getProject(clean(b.project, 60));
-  if (!p) return { error: 'Pick a project first.' };
-  const name = clean(b.name, 40);
-  if (!/^[a-z][a-z0-9-]{1,29}$/.test(name)) return { error: 'Name must be 2 to 30 characters: lowercase letters, numbers and dashes, starting with a letter.' };
-  if (RESERVED.includes(name)) return { error: `"${name}" is a built-in Claude Code agent name. Pick another.` };
-  const role = clean(b.role, 80);
-  if (role.length < 2) return { error: 'Add a short role, for example "Test writer".' };
-  const preset = PRESETS[b.type];
-  if (!preset) return { error: 'Pick an agent type.' };
-  const instructions = String(b.description || '').trim().slice(0, 8000);
-  if (instructions.length < 10) return { error: 'Describe what this agent does in a sentence or two.' };
-  const description = clean(b.when, 300) || clean(instructions, 200);
-  const emblem = EMBLEMS.includes(b.emblem) ? b.emblem : 'orb';
-  const scope = clean(b.scope, 200) || `docs/${name}/ and agent-missions/`;
+// Every new agent starts from agent-template.md. Only its goal, its way of working and a few optional extras change.
+const TEMPLATE_FILE = path.join(__dirname, 'agent-template.md');
+const fill = (tpl, vars) => tpl.replace(/\{\{(\w+)\}\}/g, (m, k) => (k in vars ? vars[k] : m));
 
+function agentFields(b, name) {
+  const goal = String(b.goal || b.description || '').trim().slice(0, 1000);
+  if (goal.length < 3) return { error: 'Describe its goal in a sentence.' };
+  const tools = PRESETS[b.type];
+  if (!tools) return { error: 'Pick what the agent may do.' };
+  const custom = b.custom === true;
+  const prompt = custom ? String(b.prompt || '').trim().slice(0, 20000) : '';
+  if (custom && prompt.length < 10) return { error: 'Write the prompt, or switch off "Write the whole prompt myself".' };
+  return {
+    goal, tools, type: b.type, custom, prompt,
+    how: String(b.how || '').trim().slice(0, 6000),
+    extra: String(b.extra || '').trim().slice(0, 4000),
+    role: clean(b.role, 80) || clean(goal, 60).replace(/[.\s]+$/, ''),
+    when: clean(b.when, 300) || clean(goal, 200),
+    scope: clean(b.scope, 200) || `docs/${name}/ and agent-missions/`,
+    emblem: EMBLEMS.includes(b.emblem) ? b.emblem : 'orb',
+  };
+}
+
+function agentFiles(p, name, f) {
   const NAME = name.toUpperCase();
   const root = p.root, win = path.win32;
   const promptPath = win.join(root, 'agent-prompts', `${name}.md`);
   const statusPath = win.join(root, 'agent-status', `${name}.md`);
   const defPath = path.join(agentsDir(p), `${name}.md`);
-  if (fs.existsSync(defPath)) return { error: `An agent named "${name}" already exists in ${p.name}.` };
-
-  const prompt = `# You are ${NAME}: ${role}, ${p.name} project
-
-You are a dedicated agent on the ${p.name} project (folder: ${root}). This file is your standing job description. The user tells you WHAT to do each time; your role and rules are defined here.
-
-## Your job
-${instructions}
-
-## Orientation (every session)
-- Working directory: ${root}. Read CLAUDE.md or README.md there first if they exist.
-- Check ${win.join(root, 'agent-missions')} for files named ${name}-*.md. Treat them as priority work.
-
-## Hard rules
-1. Write only inside your scope: ${scope}.
-2. Prefix commit messages with "${NAME}:" and commit only your own files by explicit path. Never push; the user decides when to push.
-3. Keep your status file up to date (see your agent definition): first action and last action.
-4. Be honest about confidence: separate "verified by running it", "verified by reading it" and "not verified".
-
-## Output
-Write deliverables to docs/${name}/<topic>.md and end with a short report: what you did, what is unverified, what needs the user.
-`;
+  let prompt;
+  if (f.custom) prompt = f.prompt + '\n';
+  else {
+    let tpl;
+    try { tpl = fs.readFileSync(TEMPLATE_FILE, 'utf8'); } catch { return { error: 'agent-template.md is missing next to the server.' }; }
+    prompt = fill(tpl, {
+      NAME, role: f.role, project: p.name, root, goal: f.goal,
+      how: f.how || 'Use your judgment. Keep changes small and tell the user what you did.',
+      extra: f.extra ? `\n## Extra rules\n${f.extra}\n` : '',
+      scope: f.scope, missions: win.join(root, 'agent-missions'), name,
+    });
+  }
   const def = `---
 name: ${name}
-description: ${JSON.stringify(`${role}. ${description}`)}
-tools: ${preset}
+description: ${JSON.stringify(f.when.startsWith(f.role) ? f.when : `${f.role}. ${f.when}`)}
+tools: ${f.tools}
 ---
 
-You are ${NAME} (${role}) for the ${p.name} project, launched as a subagent by the orchestrator session.
+You are ${NAME} (${f.role}) for the ${p.name} project, launched as a subagent by the orchestrator session.
 
 1. Read \`${promptPath}\` in full. It is your standing job description and the source of truth for your role and rules. Follow it exactly.
 2. The orchestrator's message is your topic. Act on it immediately; do not re-ask what your role is.
@@ -235,19 +234,92 @@ You are ${NAME} (${role}) for the ${p.name} project, launched as a subagent by t
    - Rewrite it at each milestone.
    - If you stop for any reason, set \`state: blocked\` or \`state: failed\` with the reason in \`step\`.
    - Your last tool call before the final report must set \`state: done\` with \`output\` set. Do not report finished until this write is done.
-4. Other agents may run in parallel in the same checkout. Your write scope is ${scope}. When committing, stage and commit only your own files by explicit path, never \`git add -A\`. Never push.
+4. Other agents may run in parallel in the same checkout. Your write scope is ${f.scope}. When committing, stage and commit only your own files by explicit path, never \`git add -A\`. Never push.
 5. Finish with a short report: what you did and how, what is unverified, and any mission file you wrote for another agent.
 `;
+  return { prompt, def, promptPath, statusPath, defPath };
+}
+
+const metaOf = f => ({ emblem: f.emblem, type: f.type, goal: f.goal, how: f.how, extra: f.extra, role: f.role, when: f.when, scope: f.scope, custom: f.custom, prompt: f.prompt });
+const validName = n => /^[a-z][a-z0-9-]{1,29}$/.test(n);
+
+function createAgent(b) {
+  const p = getProject(clean(b.project, 60));
+  if (!p) return { error: 'Pick a project first.' };
+  const name = clean(b.name, 40);
+  if (!validName(name)) return { error: 'Name must be 2 to 30 characters: lowercase letters, numbers and dashes, starting with a letter.' };
+  if (RESERVED.includes(name)) return { error: `"${name}" is a built-in Claude Code agent name. Pick another.` };
+  const f = agentFields(b, name);
+  if (f.error) return f;
+  const files = agentFiles(p, name, f);
+  if (files.error) return files;
+  if (fs.existsSync(files.defPath)) return { error: `An agent named "${name}" already exists in ${p.name}.` };
   try {
     fs.mkdirSync(agentsDir(p), { recursive: true });
     fs.mkdirSync(promptsDir(p), { recursive: true });
     fs.mkdirSync(statusDir(p), { recursive: true });
-    fs.writeFileSync(promptPath, prompt, { flag: 'wx' });
-    fs.writeFileSync(defPath, def, { flag: 'wx' });
-    fs.writeFileSync(statusPath, 'state: idle\ntask: -\nstep: -\nupdated: -\noutput: -\n', { flag: 'wx' });
-    p.meta = p.meta || {}; p.meta[name] = { emblem, type: b.type }; saveProjects();
+    fs.writeFileSync(files.promptPath, files.prompt, { flag: 'wx' });
+    fs.writeFileSync(files.defPath, files.def, { flag: 'wx' });
+    fs.writeFileSync(files.statusPath, 'state: idle\ntask: -\nstep: -\nupdated: -\noutput: -\n', { flag: 'wx' });
+    p.meta = p.meta || {}; p.meta[name] = metaOf(f); saveProjects();
   } catch (e) { return { error: `Could not write the agent files: ${e.code || e.message}` }; }
-  return { ok: true, name, project: p.id, root, files: [defPath, promptPath, statusPath] };
+  return { ok: true, name, project: p.id, root: p.root, files: [files.defPath, files.promptPath, files.statusPath] };
+}
+
+// Only agents created from the board can be edited: their form values are stored, so nothing hand-written is overwritten.
+function editableAgent(b) {
+  const p = getProject(clean(b.project, 60));
+  if (!p) return { error: 'Pick a project first.' };
+  const name = clean(b.name, 40);
+  if (!validName(name) || !fs.existsSync(path.join(agentsDir(p), `${name}.md`))) return { error: `There is no agent named "${name}" in ${p.name}.` };
+  const m = (p.meta || {})[name];
+  if (!m || !m.goal) return { error: `"${name}" was written by hand, so the board will not overwrite it. Edit .claude/agents/${name}.md instead.` };
+  return { p, name, m };
+}
+
+function getAgentForm(b) {
+  const r = editableAgent(b);
+  if (r.error) return r;
+  return { ok: true, name: r.name, ...r.m };
+}
+
+function updateAgent(b) {
+  const r = editableAgent(b);
+  if (r.error) return r;
+  const f = agentFields(b, r.name);
+  if (f.error) return f;
+  const files = agentFiles(r.p, r.name, f);
+  if (files.error) return files;
+  try {
+    fs.writeFileSync(files.promptPath, files.prompt);
+    fs.writeFileSync(files.defPath, files.def);
+    r.p.meta[r.name] = metaOf(f); saveProjects();
+  } catch (e) { return { error: `Could not write the agent files: ${e.code || e.message}` }; }
+  return { ok: true, name: r.name };
+}
+
+// Remove moves the agent's files into <project>/agent-removed/<name>-<time>/ so nothing is lost. Outputs and commits stay.
+function removeAgent(b) {
+  const p = getProject(clean(b.project, 60));
+  if (!p) return { error: 'Pick a project first.' };
+  const name = clean(b.name, 40);
+  if (!validName(name)) return { error: 'Bad agent name.' };
+  const defPath = path.join(agentsDir(p), `${name}.md`);
+  if (!fs.existsSync(defPath)) return { error: `There is no agent named "${name}" in ${p.name}.` };
+  const a = readAgents(p).find(x => x.name === name);
+  if (a && a.state === 'running' && Date.now() - a.updated < 15 * 60 * 1000) return { error: `${name} is running. Wait for it to finish first.` };
+  const dest = path.join(p.root, 'agent-removed', `${name}-${new Date().toISOString().replace(/[-:]/g, '').replace(/\..*/, '')}`);
+  try {
+    fs.mkdirSync(dest, { recursive: true });
+    for (const src of [defPath, path.join(promptsDir(p), `${name}.md`), path.join(statusDir(p), `${name}.md`)]) {
+      if (fs.existsSync(src)) fs.renameSync(src, path.join(dest, path.basename(path.dirname(src)) + '-' + path.basename(src)));
+    }
+    if (p.meta) delete p.meta[name];
+    p.order = (p.order || []).filter(n => n !== name);
+    saveProjects();
+  } catch (e) { return { error: `Could not remove the agent: ${e.code || e.message}` }; }
+  broadcast();
+  return { ok: true, name, movedTo: dest };
 }
 
 // A run request is just a file in <project>/agent-requests/. The server never starts anything:
@@ -334,13 +406,18 @@ http.createServer((req, res) => {
     if (!originOk(req)) return json(res, { error: 'Request blocked.' }, 403);
     return readBody(req, body => {
       if (!body) return json(res, { error: 'Bad request.' }, 400);
-      if (url.pathname === '/api/agents') { const r = createAgent(body); return json(res, r, r.error ? 400 : 200); }
+      const act = { '/api/agents': createAgent, '/api/agents/update': updateAgent, '/api/agents/remove': removeAgent }[url.pathname];
+      if (act) { const r = act(body); return json(res, r, r.error ? 400 : 200); }
       if (url.pathname === '/api/projects') { const r = createProject(body); return json(res, r, r.error ? 400 : 200); }
       if (url.pathname === '/api/requests') { const r = createRequest(body); return json(res, r, r.error ? 400 : 200); }
       json(res, { error: 'Not found.' }, 404);
     });
   }
 
+  if (url.pathname === '/api/agent') {
+    const r = getAgentForm({ project: url.searchParams.get('project') || '', name: url.searchParams.get('name') || '' });
+    return json(res, r, r.error ? 404 : 200);
+  }
   if (url.pathname === '/api/projects') return json(res, projects.map(p => ({ id: p.id, name: p.name, root: p.root })));
   if (url.pathname === '/api/state') {
     const p = getProject(url.searchParams.get('project') || '') || projects[0];

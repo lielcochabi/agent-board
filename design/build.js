@@ -2,7 +2,7 @@
 // swaps the mock data layer for the real local API and removes demo-only controls.
 const fs = require('fs');
 const path = require('path');
-const src = fs.readFileSync(path.join(__dirname, 'agent-board.design.html'), 'utf8');
+const src = fs.readFileSync(path.join(__dirname, 'agent-board.design.html'), 'utf8').replace(/\r\n/g, '\n');
 let t = src;
 
 function cut(startMarker, endMarker, replacement) {
@@ -35,6 +35,9 @@ const api = {
   async run(project, agent, task){ await post('/api/run', { project, agent, task }); },
   async stop(project, agent){ await post('/api/stop', { project, agent }); },
   async createAgent(project, a){ await post('/api/agents', { project, ...a }); },
+  async getAgent(project, name){ return j('/api/agent?project=' + encodeURIComponent(project) + '&name=' + encodeURIComponent(name)); },
+  async updateAgent(project, a){ await post('/api/agents/update', { project, ...a }); },
+  async removeAgent(project, name){ await post('/api/agents/remove', { project, name }); },
   async createProject(p){ return (await post('/api/projects', p)).id; }
 };
 
@@ -56,9 +59,7 @@ rep(`$('#launcherToggle').onchange = e => { S.launcherDown = e.target.checked; }
 rep(`const TYPE_HELP = { Researcher:'Tools: Read, Grep, Glob, WebSearch · no file writes', Reviewer:'Tools: Read, Grep, Glob · comments only, no edits', Builder:'Tools: Read, Edit, Write, Bash · writes inside its scope' };`,
     `const TYPE_HELP = { Researcher:'Tools: Read, Grep, Glob, Bash, WebSearch, WebFetch, Write · writes notes to its docs folder', Reviewer:'Tools: Read, Grep, Glob, Bash, Write · writes review notes only, no code edits', Builder:'Tools: Read, Grep, Glob, Bash, Write, Edit · can change project files inside its scope' };`);
 
-// 4. show the server's own error text
-rep(`catch(err){ return setFieldError('fwName', 'eName', 'Couldn\\'t save the agent file: ' + err.message); }`,
-    `catch(err){ return setFieldError('fwName', 'eName', err.message); }`);
+// 4. show the server's own error text (the agent form already does)
 rep(`catch(err){ setFieldError('fwPRoot', 'ePRoot', 'Couldn\\'t add it: ' + err.message); }`,
     `catch(err){ setFieldError('fwPRoot', 'ePRoot', err.message); }`);
 

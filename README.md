@@ -5,7 +5,8 @@ Local web app (no dependencies, Node 18+) for managing AI agents across several 
 - **Folder strip:** one tab per project. A small dot on each tab shows running, blocked, failed or just-finished work in that project.
 - **Stage:** the focused project's agents as animated emblems. Active agents sit forward; idle ones stand by.
 - **Agent panel:** current task and step and the agent's output documents rendered as text. Commits are behind the Commits button. The panel has a task box: it queues a run request, and Claude Code runs it in your own session (see Claude Code plugin). The board itself never starts anything.
-- **Create:** "New agent" writes the agent's definition, job description and status file into the project; "+" adds a project folder.
+- **Create:** "New agent" asks for a name, a **goal** and (optionally) **how it works**, plus what it may do (Researcher, Reviewer or Builder) and an emblem. Everything else comes from `agent-template.md`: edit that one file to change the rules every new agent gets. "Advanced" adds role, when-to-use, write scope and extra rules, or lets you write the whole prompt yourself. "+" adds a project folder.
+- **Edit / Remove:** the agent panel has Edit agent (reopens the form with the saved values and rewrites its files) and Remove (asks first; moves the definition, prompt and status file to `agent-removed/` in the project, so nothing is lost; outputs and commits stay). Agents written by hand are never overwritten: Edit is off for them.
 - **Live:** changes on disk are pushed to the page over Server-Sent Events.
 
 ## Claude Code plugin

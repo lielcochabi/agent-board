@@ -318,6 +318,15 @@ dialog.sheet[open]{animation:sheetIn .24s var(--ease)}
 .field.bad .ferr{display:block}
 .field.bad input,.field.bad textarea{border-color:var(--red)}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.adv{border-top:1px solid var(--line);padding-top:14px}
+.adv summary{cursor:pointer;font:500 12px/1.2 var(--sans);color:var(--ink-2);list-style:none}
+.adv summary::before{content:"+";display:inline-block;width:14px;color:var(--ink-3)}
+.adv[open] summary::before{content:"-"}
+.adv-body{display:grid;gap:16px;margin-top:14px}
+.chk{display:flex;gap:10px;align-items:flex-start;font-size:13px;color:var(--ink-2)}
+.chk input{margin-top:3px}
+.chk small{display:block;color:var(--ink-3);font-size:12px;margin-top:2px}
+.manage{display:flex;gap:8px;flex-wrap:wrap}
 .seg{display:flex;border:1px solid var(--line-2);border-radius:var(--r-sm);overflow:hidden}
 .seg label{flex:1;position:relative}
 .seg input{position:absolute;opacity:0;inset:0;width:100%;height:100%;margin:0;cursor:pointer}
@@ -424,9 +433,9 @@ dialog.sheet[open]{animation:sheetIn .24s var(--ease)}
         <div class="field"><label for="fProject">Project</label><select id="fProject"></select></div>
         <div class="field" id="fwName"><label for="fName">Name</label><input id="fName" placeholder="e.g. pathfinder" autocomplete="off" aria-describedby="eName"><span class="ferr" id="eName"></span></div>
       </div>
-      <div class="field" id="fwRole"><label for="fRole">Role</label><input id="fRole" placeholder="e.g. Route planner for the GPS cane" aria-describedby="eRole"><span class="ferr" id="eRole">Give it a one-line role so you can tell agents apart.</span></div>
-      <div class="field"><label for="fWhen">When should it be used <span class="opt">· helps Claude Code pick it</span></label><input id="fWhen" placeholder="e.g. Before any change to navigation or sensor code"></div>
-      <div class="field"><span class="lbl" id="typeLbl">Type</span>
+      <div class="field" id="fwGoal"><label for="fGoal">Goal</label><textarea id="fGoal" rows="2" placeholder="One sentence: what is this agent for? e.g. Keep the README and docs accurate." aria-describedby="eGoal"></textarea><span class="ferr" id="eGoal">Give it a goal, one sentence is enough.</span></div>
+      <div class="field"><label for="fHow">How it works <span class="opt">· optional</span></label><textarea id="fHow" rows="3" placeholder="Its approach. e.g. Compare each change with the code, write findings to docs, never touch source files."></textarea><span class="help">Everything else (rules, status updates, commits, reporting) comes from the shared template.</span></div>
+      <div class="field"><span class="lbl" id="typeLbl">What may it do</span>
         <div class="seg" role="radiogroup" aria-labelledby="typeLbl">
           <label><input type="radio" name="type" value="Researcher" checked><span>Researcher</span></label>
           <label><input type="radio" name="type" value="Reviewer"><span>Reviewer</span></label>
@@ -438,10 +447,19 @@ dialog.sheet[open]{animation:sheetIn .24s var(--ease)}
         <div class="picker" id="picker" role="radiogroup" aria-labelledby="embLbl"></div>
         <span class="help">Stored as <code class="mono">emblem</code>. It never changes on its own.</span>
       </div>
-      <div class="field" id="fwWhat"><label for="fWhat">What does it do</label><textarea id="fWhat" placeholder="Describe its job, what it reads, what it should produce." aria-describedby="eWhat"></textarea><span class="ferr" id="eWhat">Tell it what to do — a sentence or two is enough.</span></div>
-      <div class="field"><label for="fScope">Write scope <span class="opt">· optional</span></label><input id="fScope" class="mono" placeholder="src/navigation/**"><span class="help">Leave empty to use the type's defaults.</span></div>
+      <details class="adv" id="advanced">
+        <summary>Advanced</summary>
+        <div class="adv-body">
+          <div class="field"><label for="fRole">Role <span class="opt">· short label, defaults to the goal</span></label><input id="fRole" placeholder="e.g. Docs keeper"></div>
+          <div class="field"><label for="fWhen">When should it be used <span class="opt">· helps Claude Code pick it</span></label><input id="fWhen" placeholder="Defaults to the goal"></div>
+          <div class="field"><label for="fScope">Write scope <span class="opt">· optional</span></label><input id="fScope" class="mono" placeholder="docs/<name>/ and agent-missions/"></div>
+          <div class="field"><label for="fExtra">Extra rules <span class="opt">· added to the template</span></label><textarea id="fExtra" rows="2" placeholder="Anything the template does not already say."></textarea></div>
+          <label class="chk"><input type="checkbox" id="fCustom"><span>Write the whole prompt myself<small>Replaces the template text. The board still keeps its status file and tools.</small></span></label>
+          <div class="field" id="fwPrompt" hidden><label for="fPrompt">Full prompt</label><textarea id="fPrompt" rows="8" class="mono" aria-describedby="ePrompt"></textarea><span class="ferr" id="ePrompt">Write the prompt, or switch this off.</span></div>
+        </div>
+      </details>
     </div>
-    <div class="sh-foot"><button type="button" class="btn ghost" data-close>Cancel</button><button type="submit" class="btn primary">Create agent</button></div>
+    <div class="sh-foot"><button type="button" class="btn ghost" data-close>Cancel</button><button type="submit" class="btn primary" id="agentSubmit">Create agent</button></div>
   </form>
 </dialog>
 
@@ -704,6 +722,19 @@ const api = {
     MOCK.state[project].agents.push({ ...a, state:'idle', task:'', step:'', updated:Date.now(), missions:0 });
     emitChange();
   },
+  async getAgent(project, name){
+    if (!USE_MOCK){ const r = await fetch('/api/agent?project=' + encodeURIComponent(project) + '&name=' + encodeURIComponent(name)); const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.error || 'Could not load it'); return d; }
+    const a = MOCK.state[project].agents.find(x => x.name === name);
+    return { name, goal: a.role || '', how: '', type: a.type || 'Researcher', emblem: a.emblem, role: a.role || '', when: '', scope: '', extra: '', custom: false, prompt: '' };
+  },
+  async updateAgent(project, a){
+    if (!USE_MOCK){ const r = await post('/api/agents/update', { project, ...a }); if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Request failed'); return; }
+    Object.assign(MOCK.state[project].agents.find(x => x.name === a.name), { role: a.role || a.goal, emblem: a.emblem, type: a.type }); emitChange();
+  },
+  async removeAgent(project, name){
+    if (!USE_MOCK){ const r = await post('/api/agents/remove', { project, name }); if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Request failed'); return; }
+    const l = MOCK.state[project].agents; l.splice(l.findIndex(x => x.name === name), 1); emitChange();
+  },
   async createProject(p){
     if (!USE_MOCK){ const r = await post('/api/projects', p); if (!r.ok) throw new Error(await r.text()); return (await r.json()).id; }
     let id = slug(p.name); while (MOCK.projects.some(x => x.id === id)) id += '-2';
@@ -819,7 +850,7 @@ const embWrap = (kind, state) => `<span class="emb-wrap"${state ? ` data-state="
    ================================================================ */
 const S = {
   projects: [], all: {}, focus: 'jarvis', panel: null, launcherDown: false,
-  logs: {}, justDone: {}, fallback: {}, runErr: {}, flash: {}, prevStates: {}, lastFocusEl: null, runKey: ''
+  logs: {}, justDone: {}, fallback: {}, runErr: {}, confirmRemove: null, flash: {}, prevStates: {}, lastFocusEl: null, runKey: ''
 };
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -1063,7 +1094,7 @@ async function renderPanel(){
   if (S.headKey !== hk){
     S.headKey = hk;
     head.innerHTML = `${embWrap(a.emblem, a.state)}<div class="p-title"><h2>${esc(a.name)}</h2><div class="sub">${esc(a.role)}</div></div>${CLOSE_BTN}`;
-    body.innerHTML = `<section class="p-sec" id="pFacts"></section><section class="p-sec" id="pRun" aria-label="Run"></section><section class="p-sec" id="pDocs"></section>`;
+    body.innerHTML = `<section class="p-sec" id="pFacts"></section><section class="p-sec" id="pRun" aria-label="Run"></section><section class="p-sec" id="pDocs"></section><section class="p-sec" id="pManage" aria-label="Manage"></section>`;
     S.runKey = '';
   }
   head.querySelector('.emb-wrap').dataset.state = a.state;
@@ -1113,6 +1144,11 @@ async function renderPanel(){
   $('#pDocs').innerHTML = `<p class="p-label">Outputs · ${docs.length}</p>` + (docs.length
     ? `<ul class="doclist">${docs.map(d => `<li class="${S.justDone?.[key] === d.id ? 'new' : ''}"><button data-doc="${esc(d.id)}"><span class="kind">${esc(d.kind)}</span><span class="dn">${esc(d.name)}</span><span class="dt" title="${abs(d.mtime)}">${ago(d.mtime)}</span></button></li>`).join('')}</ul>`
     : `<p class="muted">Nothing written yet. Outputs appear here as ${esc(a.name)} saves them.</p>`);
+  // manage: edit / remove (remove asks first and only moves files aside)
+  const busy = a.state === 'running';
+  $('#pManage').innerHTML = S.confirmRemove === key
+    ? `<p class="p-label">Remove ${esc(a.name)}?</p><p class="muted">Its definition, job description and status file move to <code>agent-removed/</code> in the project. Outputs and commits stay.</p><div class="manage"><button class="btn danger" data-remove-yes>Remove</button><button class="btn ghost" data-remove-no>Cancel</button></div>`
+    : `<p class="p-label">Manage</p><div class="manage"><button class="btn" data-edit-agent ${a.editable === false ? 'disabled' : ''}>Edit agent</button><button class="btn danger" data-remove ${busy ? 'disabled' : ''}>Remove</button></div>${a.editable === false ? `<p class="muted" style="margin-top:8px">Written by hand, so the board will not overwrite it. Edit <code>.claude/agents/${esc(a.name)}.md</code> instead.</p>` : ''}${busy ? `<p class="muted" style="margin-top:8px">Running now. Remove it once it has finished.</p>` : ''}`;
 }
 $('#panel').addEventListener('click', async e => {
   const t = e.target;
@@ -1121,6 +1157,14 @@ $('#panel').addEventListener('click', async e => {
   const d = t.closest('[data-doc]');
   if (d){ S.panel = { mode:'doc', agent:S.panel.agent, doc:d.dataset.doc }; return renderPanel(); }
   const key = S.focus + '/' + S.panel?.agent;
+  if (t.closest('[data-edit-agent]')) return openAgentSheet(S.panel.agent);
+  if (t.closest('[data-remove]')){ S.confirmRemove = key; return renderPanel(); }
+  if (t.closest('[data-remove-no]')){ S.confirmRemove = null; return renderPanel(); }
+  if (t.closest('[data-remove-yes]')){
+    const name = S.panel.agent; S.confirmRemove = null;
+    try{ await api.removeAgent(S.focus, name); }catch(err){ return toast(esc(err.message)); }
+    closePanel(); toast(`Removed <code>${esc(name)}</code>. Its files are in <code>agent-removed/</code>.`); return;
+  }
   if (t.closest('[data-run]')) return startRun();
   if (t.closest('[data-stop]')) return api.stop(S.focus, S.panel.agent);
   if (t.closest('[data-edit]')){ const task = S.fallback[key]; delete S.fallback[key]; S.runKey = ''; await renderPanel(); $('#taskIn').value = task; $('#taskIn').focus(); return; }
@@ -1151,13 +1195,32 @@ async function startRun(){
 const TYPE_HELP = { Researcher:'Tools: Read, Grep, Glob, WebSearch · no file writes', Reviewer:'Tools: Read, Grep, Glob · comments only, no edits', Builder:'Tools: Read, Edit, Write, Bash · writes inside its scope' };
 let pickedEmblem = 'orb';
 function setFieldError(wrapId, errId, msg){ const w = $('#' + wrapId); w.classList.toggle('bad', !!msg); if (msg && errId) $('#' + errId).textContent = msg; w.querySelector('input,textarea')?.setAttribute('aria-invalid', String(!!msg)); return !msg; }
-function openAgentSheet(){
-  const f = $('#agentForm'); f.reset(); pickedEmblem = 'orb';
-  ['fwName','fwRole','fwWhat'].forEach(id => setFieldError(id));
+let editing = null; // agent name while the sheet is in edit mode
+const SHEET_FIELDS = ['fwName', 'fwGoal', 'fwPrompt'];
+function syncCustom(){ $('#fwPrompt').hidden = !$('#fCustom').checked; }
+async function openAgentSheet(editName){
+  const f = $('#agentForm'); f.reset(); pickedEmblem = 'orb'; editing = editName || null;
+  SHEET_FIELDS.forEach(id => setFieldError(id));
+  $('#agentSheetTitle').textContent = editing ? 'Edit ' + editing : 'New agent';
+  $('#agentSubmit').textContent = editing ? 'Save changes' : 'Create agent';
   $('#fProject').innerHTML = S.projects.map(p => `<option value="${esc(p.id)}" ${p.id === S.focus ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+  $('#fProject').disabled = $('#fName').disabled = !!editing;
+  $('#advanced').open = false; syncCustom();
+  if (editing){
+    try{
+      const a = await api.getAgent(S.focus, editing);
+      $('#fName').value = editing; $('#fGoal').value = a.goal || ''; $('#fHow').value = a.how || '';
+      $('#fRole').value = a.role || ''; $('#fWhen').value = a.when || ''; $('#fScope').value = a.scope || '';
+      $('#fExtra').value = a.extra || ''; $('#fCustom').checked = !!a.custom; $('#fPrompt').value = a.prompt || '';
+      const r = document.querySelector(`input[name=type][value="${a.type}"]`); if (r) r.checked = true;
+      pickedEmblem = a.emblem || 'orb';
+      $('#advanced').open = !!(a.custom || a.extra || a.role || a.when);
+      syncCustom();
+    } catch(err){ return toast(esc(err.message)); }
+  }
   $('#picker').innerHTML = EMBLEMS.map(k => `<button type="button" class="pick" role="radio" data-emb="${k}" aria-checked="${k === pickedEmblem}" tabindex="${k === pickedEmblem ? 0 : -1}">${embWrap(k, 'still')}<span>${k}</span></button>`).join('');
-  $('#typeHelp').textContent = TYPE_HELP.Researcher;
-  $('#agentSheet').showModal(); $('#fName').focus();
+  $('#typeHelp').textContent = TYPE_HELP[document.querySelector('input[name=type]:checked').value];
+  $('#agentSheet').showModal(); (editing ? $('#fGoal') : $('#fName')).focus();
 }
 function selectEmblem(k, focus){
   pickedEmblem = k;
@@ -1173,23 +1236,30 @@ const hoverOn = e => { const b = e.target.closest('.pick'); if (b) b.querySelect
 const hoverOff = e => { const b = e.target.closest('.pick'); if (b && !b.contains(e.relatedTarget)) b.querySelector('.emb-wrap').dataset.state = 'still'; };
 picker.addEventListener('mouseover', hoverOn); picker.addEventListener('mouseout', hoverOff);
 picker.addEventListener('focusin', hoverOn); picker.addEventListener('focusout', hoverOff);
-$('#agentForm').addEventListener('change', e => { if (e.target.name === 'type') $('#typeHelp').textContent = TYPE_HELP[e.target.value]; });
+$('#agentForm').addEventListener('change', e => {
+  if (e.target.name === 'type') $('#typeHelp').textContent = TYPE_HELP[e.target.value];
+  if (e.target.id === 'fCustom'){ syncCustom(); if (e.target.checked){ $('#advanced').open = true; $('#fPrompt').focus(); } }
+});
 $('#agentForm').addEventListener('input', e => { const w = e.target.closest('.field.bad'); if (w) setFieldError(w.id); });
 $('#agentForm').addEventListener('submit', async e => {
   e.preventDefault();
-  const pid = $('#fProject').value, name = $('#fName').value.trim().toLowerCase(), role = $('#fRole').value.trim(), what = $('#fWhat').value.trim();
-  const taken = (S.all[pid]?.agents || []).some(a => a.name === name);
-  const okN = setFieldError('fwName', 'eName', !name ? 'Name it — this becomes its file name.' : !/^[a-z][a-z0-9-]{1,31}$/.test(name) ? 'Use lowercase letters, numbers and dashes, like "path-finder".' : taken ? `"${name}" already works in ${project(pid).name}. Pick another name.` : '');
-  const okR = setFieldError('fwRole', 'eRole', role ? '' : 'Give it a one-line role so you can tell agents apart.');
-  const okW = setFieldError('fwWhat', 'eWhat', what ? '' : 'Tell it what to do — a sentence or two is enough.');
-  if (!(okN && okR && okW)) return $('#agentSheet .field.bad input, #agentSheet .field.bad textarea').focus();
-  const type = new FormData(e.target).get('type');
-  try{
-    await api.createAgent(pid, { name, role, emblem: pickedEmblem, type, when: $('#fWhen').value.trim(), description: what, scope: $('#fScope').value.trim() });
-  } catch(err){ return setFieldError('fwName', 'eName', 'Couldn\'t save the agent file: ' + err.message); }
+  const pid = $('#fProject').value, name = $('#fName').value.trim().toLowerCase(), goal = $('#fGoal').value.trim();
+  const custom = $('#fCustom').checked, prompt = $('#fPrompt').value.trim();
+  const taken = !editing && (S.all[pid]?.agents || []).some(a => a.name === name);
+  const okN = editing || setFieldError('fwName', 'eName', !name ? 'Name it — this becomes its file name.' : !/^[a-z][a-z0-9-]{1,29}$/.test(name) ? 'Use lowercase letters, numbers and dashes, like "path-finder".' : taken ? `"${name}" already works in ${project(pid).name}. Pick another name.` : '');
+  const okG = setFieldError('fwGoal', 'eGoal', goal.length >= 3 ? '' : 'Give it a goal, one sentence is enough.');
+  const okP = !custom || setFieldError('fwPrompt', 'ePrompt', prompt.length >= 10 ? '' : 'Write the prompt, or switch this off.');
+  if (!(okN && okG && okP)){ if (!okP) $('#advanced').open = true; return $('#agentSheet .field.bad input, #agentSheet .field.bad textarea').focus(); }
+  const body = {
+    name, goal, how: $('#fHow').value.trim(), type: new FormData(e.target).get('type'), emblem: pickedEmblem,
+    role: $('#fRole').value.trim(), when: $('#fWhen').value.trim(), scope: $('#fScope').value.trim(), extra: $('#fExtra').value.trim(), custom, prompt
+  };
+  try{ await (editing ? api.updateAgent(pid, body) : api.createAgent(pid, body)); }
+  catch(err){ return setFieldError(editing ? 'fwGoal' : 'fwName', editing ? 'eGoal' : 'eName', err.message); }
   $('#agentSheet').close();
   if (pid !== S.focus) focusProject(pid);
-  toast(`Created <code>.claude/agents/${esc(name)}.md</code> — in Claude Code, say <code>Use the ${esc(name)} agent to …</code>`);
+  if (editing){ S.headKey = ''; toast(`Saved <code>${esc(name)}</code>. The new instructions apply the next time it runs.`); }
+  else toast(`Created <code>.claude/agents/${esc(name)}.md</code> — in Claude Code, say <code>Use the ${esc(name)} agent to …</code>`);
 });
 function openProjectSheet(){
   $('#projectForm').reset(); ['fwPName','fwPRoot'].forEach(id => setFieldError(id));
