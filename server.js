@@ -325,7 +325,7 @@ function agentFields(b, name) {
   const toolsCustom = clean(b.tools, 400);
   if (toolsCustom && !/^[A-Za-z0-9_*:(),. -]+$/.test(toolsCustom)) return { error: 'Tools can only contain letters, numbers, commas and names like mcp__shop.' };
   const onlyConnectors = toolsCustom && toolsCustom.split(',').every(t => !t.trim() || t.trim().startsWith('mcp__'));
-  const tools = onlyConnectors ? (PRESETS[b.type] || OPERATOR_BASE) + ', ' + toolsCustom : toolsCustom || PRESETS[b.type];
+  const tools = toolsCustom === '*' ? '' : onlyConnectors ? (PRESETS[b.type] || OPERATOR_BASE) + ', ' + toolsCustom : toolsCustom || PRESETS[b.type]; // '*' = no tools line = everything the session has
   const custom = b.custom === true;
   const prompt = custom ? String(b.prompt || '').trim().slice(0, 20000) : '';
   if (custom && prompt.length < 10) return { error: 'Write the prompt, or switch off "Write the whole prompt myself".' };

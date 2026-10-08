@@ -331,6 +331,16 @@ button{cursor:pointer}
 .t-main .muted{font-size:12px}
 .err{color:var(--red);font-size:12px;margin:6px 0 0}
 .tgform{display:grid;gap:12px;margin:8px 0}
+.tpicker{border:1px solid var(--line);border-radius:var(--r-md);background:var(--bay);display:grid}
+.tpresets{display:flex;gap:6px;flex-wrap:wrap;padding:8px 12px;align-items:center;font-size:12px;color:var(--ink-3)}
+.tpresets .btn{height:26px;padding:0 10px;font-size:12px}
+.tgrp{padding:10px 12px;border-top:1px solid var(--line)}
+.tgrp-h{display:flex;gap:8px;align-items:baseline;font:500 12.5px/1.3 var(--sans);color:var(--ink)}
+.tgrp-h small{color:var(--ink-3);font-weight:400;font-size:12px}
+.tgrp-items{display:flex;flex-wrap:wrap;gap:6px 18px;margin:8px 0 0 24px}
+.tgrp-items label{display:inline-flex;gap:6px;align-items:center;font:400 12.5px/1.3 var(--mono);color:var(--ink-2)}
+.field .tpicker input[type=checkbox]{width:16px;height:16px;padding:0;flex:none;align-self:center}
+.tnote{margin:0;padding:10px 12px;border-top:1px solid var(--line);font-size:12px;color:var(--ink-3);line-height:1.5}
 .conn{display:flex;flex-wrap:wrap;gap:6px 14px;padding:2px 0}
 .conn label{display:inline-flex;gap:6px;align-items:center;font-size:13px;color:var(--ink-2)}
 .field .conn input{width:16px;height:16px;padding:0;flex:none}
@@ -524,7 +534,16 @@ dialog.sheet[open]{animation:sheetIn .24s var(--ease)}
       <details class="adv" id="advanced">
         <summary>Advanced</summary>
         <div class="adv-body">
-          <div class="field"><label for="fTools">Tools <span class="opt">· optional, replaces the type's list</span></label><input id="fTools" class="mono" placeholder="e.g. Read, Write, WebSearch, mcp__shopify"><div class="conn" id="connList" hidden></div><span class="help">Comma separated. Ticking an app adds its <code class="mono">mcp__</code> name; Claude then also keeps the type's normal file tools. <span id="connNote"></span></span></div>
+          <div class="field" id="fwTools"><span class="lbl" id="toolsLbl">Tools</span>
+            <div class="seg" role="radiogroup" aria-labelledby="toolsLbl">
+              <label><input type="radio" name="tmode" value="default" checked><span>Type default</span></label>
+              <label><input type="radio" name="tmode" value="all"><span>All tools</span></label>
+              <label><input type="radio" name="tmode" value="choose"><span>Choose</span></label>
+            </div>
+            <span class="help" id="toolsHelp"></span>
+            <div class="tpicker" id="toolPicker" hidden></div>
+            <input id="fTools" class="mono" aria-label="Resulting tool list" placeholder="Resulting list, for example Read, Write, mcp__shopify">
+          </div>
           <div class="field"><label for="fRole">Role <span class="opt">· short label, defaults to the goal</span></label><input id="fRole" placeholder="e.g. Docs keeper"></div>
           <div class="field"><label for="fWhen">When should it be used <span class="opt">· helps Claude Code pick it</span></label><input id="fWhen" placeholder="Defaults to the goal"></div>
           <div class="field"><label for="fScope">Write scope <span class="opt">· optional</span></label><input id="fScope" class="mono" placeholder="docs/<name>/ and agent-missions/"></div>
@@ -1093,25 +1112,62 @@ function setFieldError(wrapId, errId, msg){ const w = $('#' + wrapId); w.classLi
 let editing = null; // agent name while the sheet is in edit mode
 const SHEET_FIELDS = ['fwName', 'fwGoal', 'fwPrompt'];
 function syncCustom(){ $('#fwPrompt').hidden = !$('#fCustom').checked; }
-const connTokens = () => $('#fTools').value.split(',').map(x => x.trim()).filter(Boolean);
-function syncConn(){ const have = new Set(connTokens()); document.querySelectorAll('#connList input').forEach(c => { c.checked = have.has(c.dataset.tool); }); }
-async function loadConnectors(pid){
-  const host = $('#connList'); host.hidden = true; host.innerHTML = '';
-  let list = []; try{ list = (await api.connectors(pid)).servers || []; }catch{}
-  host.innerHTML = list.map(c => `<label><input type="checkbox" data-tool="${esc(c.tool)}"> ${esc(c.name)} <small>${esc(c.source)}</small></label>`).join('');
-  host.hidden = !list.length;
-  $('#connNote').textContent = list.length
-    ? "Only apps listed in this project's .mcp.json or your Claude settings show here. Connectors you added in the Claude app are not visible to the board: type their tool names above (the Connectors settings in the Claude app shows what is connected)."
-    : "No apps found in this project's .mcp.json or your Claude settings. Connect an app first (Connectors settings in the Claude app, or a .mcp.json file); apps added in the Claude app can be typed here by their mcp__ name.";
-  syncConn();
+/* tools picker, laid out like the tool selector in Claude Code: groups with a checkbox each, connected apps last */
+const TOOL_GROUPS = [
+  ['Read-only tools', 'look at files and search', ['Read', 'Grep', 'Glob']],
+  ['Edit tools', 'change files', ['Edit', 'Write', 'NotebookEdit']],
+  ['Execution tools', 'run commands', ['Bash']],
+  ['Web tools', 'search and fetch pages', ['WebSearch', 'WebFetch']]
+];
+const TYPE_TOOLS = { Researcher: 'Read, Grep, Glob, Bash, Write, WebSearch, WebFetch', Reviewer: 'Read, Grep, Glob, Bash, Write', Builder: 'Read, Grep, Glob, Bash, Write, Edit', Operator: '' };
+const TOOL_BASE = 'Read, Grep, Glob, Write, Edit, Bash, WebSearch, WebFetch';
+const TOOL_PRESETS = [['Read-only', 'Read, Grep, Glob'], ['Researcher', TYPE_TOOLS.Researcher], ['Builder', TYPE_TOOLS.Builder], ['Everything built in', TOOL_BASE]];
+S.connectors = [];
+const curType = () => document.querySelector('input[name=type]:checked')?.value || 'Researcher';
+const toolTokens = () => $('#fTools').value.split(',').map(x => x.trim()).filter(Boolean);
+const toolMode = () => { const t = $('#fTools').value.trim(); return t === '' ? 'default' : t === '*' ? 'all' : 'choose'; };
+function renderTools(){
+  const mode = toolMode(), type = curType(), picker = $('#toolPicker');
+  document.querySelector(`input[name=tmode][value="${mode}"]`).checked = true;
+  picker.hidden = mode !== 'choose';
+  $('#toolsHelp').textContent = mode === 'default'
+    ? (type === 'Operator' ? 'Operator uses every tool the session has, connected apps included.' : `${type} gets: ${TYPE_TOOLS[type]}.`)
+    : mode === 'all'
+      ? "Every tool the session that runs it has: files, shell, web, connected apps and the Claude app's own tools (browser, scheduled tasks, other chats). What you can do in a Claude Code chat there, it can do."
+      : 'Only the ticked tools. Keep Write ticked so it can report its status.';
+  if (mode !== 'choose') return;
+  const have = new Set(toolTokens());
+  const groups = TOOL_GROUPS.map(([title, note, items]) => ({ title, note, items: items.map(x => ({ id: x, label: x })) }));
+  if (S.connectors.length) groups.push({ title: 'Connected apps', note: 'all tools of the app', items: S.connectors.map(c => ({ id: c.tool, label: c.name })) });
+  picker.innerHTML = `<div class="tpresets">Start from: ${TOOL_PRESETS.map(([n, v]) => `<button type="button" class="btn ghost" data-tpreset="${esc(v)}">${esc(n)}</button>`).join('')}</div>`
+    + groups.map((g, gi) => `<div class="tgrp"><label class="tgrp-h"><input type="checkbox" data-tgroup="${gi}"> ${esc(g.title)} <small>${esc(g.note)}</small></label><div class="tgrp-items">${g.items.map(i => `<label><input type="checkbox" data-tool="${esc(i.id)}" ${have.has(i.id) ? 'checked' : ''}> ${esc(i.label)}</label>`).join('')}</div></div>`).join('')
+    + `<p class="tnote">${S.connectors.length ? "Connected apps listed here come from this project's .mcp.json and your Claude settings. Connectors you added in the Claude app are not visible to the board: type their mcp__ names in the list below." : "No connected apps found in this project's .mcp.json or your Claude settings. Connect one first (Connectors in the Claude app, or a .mcp.json file), or type its mcp__ name in the list below."}</p>`;
+  picker.querySelectorAll('[data-tgroup]').forEach(c => {
+    const g = groups[+c.dataset.tgroup], n = g.items.filter(i => have.has(i.id)).length;
+    c.checked = n === g.items.length; c.indeterminate = n > 0 && n < g.items.length;
+  });
 }
-$('#connList').addEventListener('change', e => {
-  const t = e.target.dataset?.tool; if (!t) return;
-  const next = connTokens().filter(x => x !== t); if (e.target.checked) next.push(t);
-  $('#fTools').value = next.join(', ');
-  if (next.length) $('#advanced').open = true;
+async function loadConnectors(pid){
+  S.connectors = []; renderTools();
+  try{ S.connectors = (await api.connectors(pid)).servers || []; }catch{}
+  renderTools();
+}
+const setTools = list => { $('#fTools').value = list; renderTools(); };
+$('#toolPicker').addEventListener('change', e => {
+  const t = e.target.dataset?.tool, g = e.target.dataset?.tgroup;
+  if (t){ const next = toolTokens().filter(x => x !== t); if (e.target.checked) next.push(t); return setTools(next.join(', ')); }
+  if (g !== undefined){
+    const ids = [...e.target.closest('.tgrp').querySelectorAll('[data-tool]')].map(c => c.dataset.tool);
+    const next = toolTokens().filter(x => !ids.includes(x)); if (e.target.checked) next.push(...ids);
+    setTools(next.join(', '));
+  }
 });
-$('#fTools').addEventListener('input', syncConn);
+$('#toolPicker').addEventListener('click', e => { const b = e.target.closest('[data-tpreset]'); if (b) setTools(b.dataset.tpreset); });
+$('#fTools').addEventListener('input', renderTools);
+document.querySelectorAll('input[name=tmode]').forEach(r => r.addEventListener('change', () => {
+  const v = document.querySelector('input[name=tmode]:checked').value;
+  setTools(v === 'default' ? '' : v === 'all' ? '*' : (TYPE_TOOLS[curType()] || TOOL_BASE));
+}));
 $('#fProject').addEventListener('change', () => loadConnectors($('#fProject').value));
 const nameFrom = t => String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^[^a-z]+|-+$/g, '').slice(0, 30).replace(/-+$/, '') || 'agent';
 async function openAgentSheet(editName, imp){
@@ -1150,7 +1206,7 @@ async function openAgentSheet(editName, imp){
   $('#agentSheet').showModal(); (editing ? $('#fGoal') : $('#fName')).focus();
 }
 $('#agentForm').addEventListener('change', e => {
-  if (e.target.name === 'type') $('#typeHelp').textContent = TYPE_HELP[e.target.value];
+  if (e.target.name === 'type'){ $('#typeHelp').textContent = TYPE_HELP[e.target.value]; renderTools(); }
   if (e.target.id === 'fCustom'){ syncCustom(); if (e.target.checked){ $('#advanced').open = true; $('#fPrompt').focus(); } }
 });
 $('#agentForm').addEventListener('input', e => { const w = e.target.closest('.field.bad'); if (w) setFieldError(w.id); });
