@@ -546,6 +546,13 @@ dialog.sheet[open]{animation:sheetIn .24s var(--ease)}
             <div class="tpicker" id="toolPicker" hidden></div>
             <input id="fTools" class="mono" aria-label="Resulting tool list" placeholder="Resulting list, for example Read, Write, mcp__shopify">
           </div>
+          <div class="field"><span class="lbl" id="runLbl">Run as</span>
+            <div class="seg" role="radiogroup" aria-labelledby="runLbl">
+              <label><input type="radio" name="runas" value="helper" checked><span>A helper in the running chat</span></label>
+              <label><input type="radio" name="runas" value="chat"><span>Its own chat</span></label>
+            </div>
+            <span class="help">A helper is quick, but it cannot start helpers of its own and shares the chat's tools. Its own chat appears in your sidebar with the full tool set, in the app's auto permission mode like your normal chats.</span>
+          </div>
           <div class="field"><label for="fRole">Role <span class="opt">· short label, defaults to the goal</span></label><input id="fRole" placeholder="e.g. Docs keeper"></div>
           <div class="field"><label for="fWhen">When should it be used <span class="opt">· helps Claude Code pick it</span></label><input id="fWhen" placeholder="Defaults to the goal"></div>
           <div class="field"><label for="fScope">Write scope <span class="opt">· optional</span></label><input id="fScope" class="mono" placeholder="docs/<name>/ and agent-missions/"></div>
@@ -1223,7 +1230,7 @@ async function renderPanel(){
     <dt>Task</dt><dd>${a.task ? esc(a.task) : '<span class="muted">No task yet</span>'}</dd>
     <dt>Step</dt><dd class="step">${a.step ? esc(a.step) : '<span class="muted">—</span>'}</dd>
     <dt>Updated</dt><dd class="mono" style="font-size:13px" title="${a.updated ? abs(a.updated) : ''}">${a.updated ? ago(a.updated) : '—'}</dd>
-    <dt>Type</dt><dd>${esc(a.type || '—')}</dd>
+    <dt>Type</dt><dd>${esc(a.type || '—')}${a.runAs === 'chat' ? ' · runs in its own chat' : ''}</dd>
     ${a.origin ? `<dt>From</dt><dd>${a.origin.kind === 'scheduled' ? 'Scheduled task' : 'Chat'}: ${esc(a.origin.title)}${a.origin.link ? ` · <a href="${esc(a.origin.link)}">open original</a>` : ''}</dd>` : ''}
     ${a.missions ? `<dt>Missions</dt><dd>${a.missions} waiting</dd>` : ''}</dl>`;
   // run control
@@ -1416,9 +1423,9 @@ async function openAgentSheet(editName, imp){
       const a = await api.getAgent(S.focus, editing);
       $('#fName').value = editing; $('#fGoal').value = a.goal || ''; $('#fHow').value = a.how || '';
       $('#fRole').value = a.role || ''; $('#fWhen').value = a.when || ''; $('#fScope').value = a.scope || '';
-      $('#fTools').value = a.tools || ''; $('#fExtra').value = a.extra || ''; $('#fCustom').checked = !!a.custom; $('#fPrompt').value = a.prompt || '';
+      $('#fTools').value = a.tools || ''; { const rr = document.querySelector(`input[name=runas][value="${a.runAs === 'chat' ? 'chat' : 'helper'}"]`); if (rr) rr.checked = true; } $('#fExtra').value = a.extra || ''; $('#fCustom').checked = !!a.custom; $('#fPrompt').value = a.prompt || '';
       const r = document.querySelector(`input[name=type][value="${a.type}"]`); if (r) r.checked = true;
-      $('#advanced').open = !!(a.custom || a.extra || a.role || a.when || a.tools);
+      $('#advanced').open = !!(a.custom || a.extra || a.role || a.when || a.tools || a.runAs === 'chat');
       syncCustom();
     } catch(err){ return toast(esc(err.message)); }
   }
@@ -1453,7 +1460,7 @@ $('#agentForm').addEventListener('submit', async e => {
   const okP = !custom || setFieldError('fwPrompt', 'ePrompt', prompt.length >= 10 ? '' : 'Write the prompt, or switch this off.');
   if (!(okN && okG && okP)){ if (!okP) $('#advanced').open = true; return $('#agentSheet .field.bad input, #agentSheet .field.bad textarea').focus(); }
   const body = {
-    name, goal, how: $('#fHow').value.trim(), type: new FormData(e.target).get('type'), iconBrief: $('#fIcon').value.trim(), tools: $('#fTools').value.trim(),
+    name, goal, how: $('#fHow').value.trim(), type: new FormData(e.target).get('type'), iconBrief: $('#fIcon').value.trim(), tools: $('#fTools').value.trim(), runAs: new FormData(e.target).get('runas'),
     role: $('#fRole').value.trim(), when: $('#fWhen').value.trim(), scope: $('#fScope').value.trim(), extra: $('#fExtra').value.trim(), custom, prompt
   };
   try{

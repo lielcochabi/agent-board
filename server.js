@@ -118,7 +118,7 @@ function readAgents(p) {
              editable: !!meta.goal,
              missions: missionFiles.filter(m => m.toLowerCase().startsWith(name + '-')).length,
              requests: requestFiles.filter(m => m.toLowerCase().startsWith(name + '-')).length,
-             space: spaceSummary(p, name), origin: meta.origin || null,
+             space: spaceSummary(p, name), origin: meta.origin || null, runAs: meta.runAs || 'helper',
              triggers: (p.triggers || []).filter(t => t.agent === name).map(t => ({ id: t.id, kind: t.kind, label: triggerLabel(t), task: t.task, enabled: t.enabled, last: t.last || 0, lastError: t.lastError || '' })) };
   });
   const rank = n => { const i = p.order.indexOf(n); return i < 0 ? 999 : i; };
@@ -330,7 +330,7 @@ function agentFields(b, name) {
   const prompt = custom ? String(b.prompt || '').trim().slice(0, 20000) : '';
   if (custom && prompt.length < 10) return { error: 'Write the prompt, or switch off "Write the whole prompt myself".' };
   return {
-    goal, tools, toolsCustom, type: b.type, custom, prompt,
+    goal, tools, toolsCustom, type: b.type, custom, prompt, runAs: b.runAs === 'chat' ? 'chat' : 'helper',
     how: String(b.how || '').trim().slice(0, 6000),
     extra: String(b.extra || '').trim().slice(0, 4000),
     role: clean(b.role, 80) || clean(goal, 60).replace(/[.\s]+$/, ''),
@@ -392,7 +392,7 @@ You are ${NAME} (${f.role}) for the ${p.name} project, launched as a subagent by
   return { prompt, def, promptPath, statusPath, defPath };
 }
 
-const metaOf = f => ({ emblem: f.emblem, type: f.type, tools: f.toolsCustom, goal: f.goal, how: f.how, extra: f.extra, role: f.role, when: f.when, scope: f.scope, custom: f.custom, prompt: f.prompt });
+const metaOf = f => ({ emblem: f.emblem, type: f.type, tools: f.toolsCustom, runAs: f.runAs, goal: f.goal, how: f.how, extra: f.extra, role: f.role, when: f.when, scope: f.scope, custom: f.custom, prompt: f.prompt });
 const validName = n => /^[a-z][a-z0-9-]{1,29}$/.test(n);
 
 function createAgent(b) {
@@ -505,7 +505,7 @@ function createRequest(b) {
   const file = path.join(dir, `${agent}-${now.toISOString().replace(/[-:]/g, '').replace(/\..*/, '')}-${Math.random().toString(36).slice(2, 6)}.md`);
   try {
     fs.mkdirSync(dir, { recursive: true });
-    const text = ['agent: ' + agent, 'requested: ' + now.toISOString(), ...(source ? ['source: ' + source] : []), 'status: pending', '---', task, ''].join('\n');
+    const text = ['agent: ' + agent, 'requested: ' + now.toISOString(), ...(source ? ['source: ' + source] : []), ...(((p.meta || {})[agent] || {}).runAs === 'chat' ? ['run: chat'] : []), 'status: pending', '---', task, ''].join('\n');
     fs.writeFileSync(file, text, { flag: 'wx' });
   } catch (e) { return { error: `Could not queue the request: ${e.code || e.message}` }; }
   watch(dir); broadcast();
