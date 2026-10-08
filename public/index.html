@@ -152,7 +152,6 @@ button{cursor:pointer}
 .emb .fill{fill:currentColor;stroke:none}
 .emb .wedge{fill:currentColor;stroke:none;opacity:.16}
 .emb .frame{fill:currentColor;fill-opacity:0;stroke:currentColor;stroke-width:1;opacity:.35;transition:fill-opacity .6s var(--ease)}
-.emb .hide{opacity:0}
 .emb .draw{stroke-dasharray:1;stroke-dashoffset:0}
 [data-state="running"] .emb{color:var(--signal)}
 [data-state="done"] .emb{color:var(--ink-2)}
@@ -274,10 +273,6 @@ button{cursor:pointer}
 .runbox .hint{font:400 12px/1.4 var(--mono);color:var(--ink-3)}
 .runbox .err{color:var(--red)}
 .live{display:grid;gap:10px}
-.live .stream{font:400 12px/1.6 var(--mono);color:var(--ink-3);margin:0;padding:0;list-style:none;max-height:140px;overflow:auto}
-.live .stream li.now{color:var(--signal)}
-.live .stream li.now::before{content:"› "}
-.live .stream li::before{content:"  ";white-space:pre}
 .progress{height:2px;background:var(--line);border-radius:2px;overflow:hidden}
 .progress i{display:block;height:100%;background:var(--signal);transition:width .4s var(--ease)}
 .fallback{border:1px dashed var(--line-2);border-radius:var(--r-md);padding:14px;background:var(--bay)}
@@ -341,11 +336,6 @@ button{cursor:pointer}
 .tgrp-items label{display:inline-flex;gap:6px;align-items:center;font:400 12.5px/1.3 var(--mono);color:var(--ink-2)}
 .field .tpicker input[type=checkbox]{width:16px;height:16px;padding:0;flex:none;align-self:center}
 .tnote{margin:0;padding:10px 12px;border-top:1px solid var(--line);font-size:12px;color:var(--ink-3);line-height:1.5}
-.conn{display:flex;flex-wrap:wrap;gap:6px 14px;padding:2px 0}
-.conn label{display:inline-flex;gap:6px;align-items:center;font-size:13px;color:var(--ink-2)}
-.field .conn input{width:16px;height:16px;padding:0;flex:none}
-.conn small{white-space:nowrap}
-.conn small{color:var(--ink-3);font-size:11px}
 .imp-group{display:grid;gap:8px}
 .imp-group h3{margin:6px 0 0;font:600 13px/1.3 var(--sans)}
 .imp-group>p{margin:0 0 4px}
@@ -413,18 +403,8 @@ dialog.sheet[open]{animation:sheetIn .24s var(--ease)}
 .seg label:last-child span{border-right:none}
 .seg input:checked+span{background:var(--signal-soft);color:var(--ink)}
 .seg input:focus-visible+span{outline:2px solid var(--focus);outline-offset:-2px}
-.pick{--size:36px;display:grid;justify-items:center;gap:6px;padding:10px 4px 8px;border:1px solid var(--line);border-radius:var(--r-md);background:var(--bay);font:400 11px/1 var(--mono);color:var(--ink-3)}
-.pick:hover,.pick:focus-visible{color:var(--ink)}
-.pick[aria-checked="true"]{border-color:var(--signal);color:var(--ink);box-shadow:inset 0 0 0 1px var(--signal)}
-.pick .emb-wrap::before{inset:-20%}
 
 /* ---------- popover + toast ---------- */
-.pop{position:absolute;top:38px;right:0;width:260px;background:var(--raise);border:1px solid var(--line-2);border-radius:var(--r-md);box-shadow:var(--shadow);padding:8px;display:none;z-index:4}
-.pop.on{display:block}
-.pop label{display:flex;gap:10px;align-items:flex-start;padding:8px;border-radius:var(--r-sm);font-size:13px;color:var(--ink-2);cursor:pointer}
-.pop label:hover{background:var(--raise-2)}
-.pop small{display:block;color:var(--ink-3);font-size:12px}
-.pop input{accent-color:var(--signal);margin-top:3px}
 .toast{position:fixed;left:50%;bottom:24px;transform:translate(-50%,20px);opacity:0;pointer-events:none;transition:all .24s var(--ease);background:var(--raise);border:1px solid var(--line-2);border-radius:var(--r-md);box-shadow:var(--shadow);padding:10px 10px 10px 16px;display:flex;gap:12px;align-items:center;max-width:calc(100% - 32px);z-index:20;font-size:13px;color:var(--ink-2)}
 .toast.on{opacity:1;transform:translate(-50%,0);pointer-events:auto}
 .toast code{font:12px var(--mono);color:var(--ink)}
@@ -458,12 +438,6 @@ dialog.sheet[open]{animation:sheetIn .24s var(--ease)}
       <button class="icon-btn" id="themeBtn" aria-label="Switch to light theme" title="Theme">
         <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="3.2"/><path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M3.4 12.6l1.1-1.1M11.5 4.5l1.1-1.1"/></svg>
       </button>
-      <button class="icon-btn" id="moreBtn" aria-label="More options" aria-expanded="false" aria-controls="pop">
-        <svg viewBox="0 0 16 16"><circle cx="3.5" cy="8" r=".9" fill="currentColor"/><circle cx="8" cy="8" r=".9" fill="currentColor"/><circle cx="12.5" cy="8" r=".9" fill="currentColor"/></svg>
-      </button>
-      <div class="pop" id="pop" role="menu">
-        <label><input type="checkbox" id="motionToggle"><span>Preview reduced motion<small>Static state glyphs instead of animation.</small></span></label>
-      </div>
     </div>
   </header>
 
@@ -591,9 +565,6 @@ dialog.sheet[open]{animation:sheetIn .24s var(--ease)}
 [data-state="done"] .m-done,[data-state="blocked"] .m-blk,[data-state="failed"] .m-fail,[data-state="running"] .m-run{display:block}
 [data-state="running"] .emb .a{animation-delay:var(--dl,0s);animation-fill-mode:backwards}
 [data-state="blocked"] .emb .a{animation-delay:calc(var(--dl,0s) - var(--dur,3s) * .42)}
-.pick[aria-checked="true"] .emb{color:var(--ink)}
-.rm-preview .emb,.rm-preview .emb *,.rm-preview .dot *,.rm-preview .a-step .caret{animation:none!important}
-.rm-preview [data-state="running"] .mark{display:grid;color:var(--signal)}
 @media (prefers-reduced-motion: reduce){[data-state="running"] .mark{display:grid;color:var(--signal)}}
 .back-link{display:inline-flex;align-items:center;gap:6px;border:none;background:none;color:var(--ink-3);font:400 12px/1 var(--mono);padding:4px 0}
 .back-link:hover{color:var(--ink)}
@@ -650,6 +621,7 @@ function emitChange(){ clearTimeout(refetchTimer); refetchTimer = setTimeout(ref
    ================================================================ */
 let UID = 0;
 const CUSTOM = {};
+function applyEmblem(a, pid){ if (a.emblemSvg){ const k = svgKey(pid, a); CUSTOM[k] = a.emblemSvg; a.emblem = k; } return a; }
 const svgKey = (pid, a) => { let h = 0; for (const c of a.emblemSvg) h = (h * 31 + c.charCodeAt(0)) | 0; return 'svg:' + pid + '/' + a.name + ':' + h; };
 function hexPath(cx, cy, r){
   const p = [];
@@ -745,7 +717,7 @@ const embWrap = (kind, state) => `<span class="emb-wrap"${state ? ` data-state="
    ================================================================ */
 const S = {
   projects: [], all: {}, focus: 'jarvis', panel: null,
-  logs: {}, justDone: {}, fallback: {}, runErr: {}, confirmRemove: null, iconEdit: null, flash: {}, prevStates: {}, lastFocusEl: null, runKey: ''
+  justDone: {}, fallback: {}, runErr: {}, confirmRemove: null, iconEdit: null, flash: {}, prevStates: {}, lastFocusEl: null, runKey: ''
 };
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -791,16 +763,13 @@ async function refetch(){
   if (!project(S.focus) && S.projects[0]) S.focus = S.projects[0].id;
   for (const [pid, st] of Object.entries(S.all)){
     for (const a of st.agents){
-      if (a.emblemSvg){ const k = svgKey(pid, a); CUSTOM[k] = a.emblemSvg; a.emblem = k; }
+      applyEmblem(a, pid);
       const key = pid + '/' + a.name, prev = S.prevStates[key];
-      const log = S.logs[key] = S.logs[key] || (a.log ? [...a.log] : []);
-      if (a.state === 'running' && a.step && log[log.length - 1] !== a.step) log.push(a.step);
       if (prev && prev !== a.state){
         if (prev === 'running' && a.state === 'done' && pid !== S.focus){ S.flash[pid] = Date.now(); setTimeout(renderStrip, 4600); }
         if (pid === S.focus) announce(`${a.name} is now ${STATE_WORD[a.state].toLowerCase()}`);
         if (prev === 'running' && a.state === 'done') (S.justDone[key] = a.newest || newestDoc(pid, a.name)?.id);
       }
-      if (a.state === 'running' && prev !== 'running') S.logs[key] = a.log ? [...a.log] : (a.step ? [a.step] : []);
       S.prevStates[key] = a.state;
     }
   }
@@ -952,7 +921,6 @@ function closePanel(restore = true){
 $('#scrim').onclick = () => closePanel();
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
-  if ($('#pop').classList.contains('on')) return togglePop(false);
   if (document.querySelector('dialog[open]')) return;
   if (S.panel?.mode === 'doc') { S.panel = { mode:'agent', agent:S.panel.agent }; S.runKey = ''; S.headKey = ''; return render(); }
   closePanel();
@@ -1029,7 +997,6 @@ async function renderPanel(){
     if (keep && $('#taskIn')) $('#taskIn').value = keep;
   }
   if (mode === 'live'){
-    const log = S.logs[key] || [];
     const m = /step (\d+) of (\d+)/.exec(a.step || '');
     $('#pProg').parentNode.style.visibility = m ? 'visible' : 'hidden';
     if (m) $('#pProg').style.width = (100 * m[1] / m[2]) + '%';
@@ -1066,7 +1033,7 @@ async function renderPanel(){
     : `<p class="p-label">Manage</p><div class="manage"><button class="btn" data-edit-agent ${a.editable === false ? 'disabled' : ''}>Edit agent</button><button class="btn" data-icon-redraw>Redraw icon</button><button class="btn danger" data-remove ${busy ? 'disabled' : ''}>Remove</button></div>${iconUi}${iconNote}${a.editable === false ? `<p class="muted" style="margin-top:8px">Written by hand, so the board will not overwrite it. Edit <code>.claude/agents/${esc(a.name)}.md</code> instead.</p>` : ''}${busy ? `<p class="muted" style="margin-top:8px">Running now. Remove it once it has finished.</p>` : ''}`;
   if (keepIcon && $('#iconIn')) $('#iconIn').value = keepIcon;
 }
-$('#panel').addEventListener('click', async e => {
+async function onPanelClick(e){
   const t = e.target;
   if (t.closest('[data-close-panel]')) return closePanel();
   if (t.closest('[data-back]')){ S.panel = { mode:'agent', agent:S.panel.agent }; S.headKey = ''; return render(); }
@@ -1096,8 +1063,7 @@ $('#panel').addEventListener('click', async e => {
     catch{ const r = document.createRange(); r.selectNodeContents($('#copyText')); getSelection().removeAllRanges(); getSelection().addRange(r); btn.textContent = 'Selected — press Ctrl+C'; }
     setTimeout(() => { if (btn.isConnected) btn.textContent = 'Copy'; }, 2200);
   }
-});
-$('#panel').addEventListener('keydown', e => { if (e.target.id === 'taskIn' && e.key === 'Enter' && (e.metaKey || e.ctrlKey)){ e.preventDefault(); startRun(); } });
+}
 $('#panel').addEventListener('input', e => {
   if (e.target.id !== 'taskIn') return;
   const key = S.focus + '/' + S.panel.agent;
@@ -1292,10 +1258,6 @@ $('#themeBtn').onclick = () => {
   const r = document.documentElement, next = r.dataset.theme === 'dark' ? 'light' : 'dark';
   r.dataset.theme = next; $('#themeBtn').setAttribute('aria-label', `Switch to ${next === 'dark' ? 'light' : 'dark'} theme`);
 };
-function togglePop(on){ $('#pop').classList.toggle('on', on); $('#moreBtn').setAttribute('aria-expanded', String(on)); if (!on) $('#moreBtn').focus(); }
-$('#moreBtn').onclick = () => togglePop(!$('#pop').classList.contains('on'));
-document.addEventListener('click', e => { if ($('#pop').classList.contains('on') && !e.target.closest('.strip-tools')) togglePop(false); });
-$('#motionToggle').onchange = e => document.documentElement.classList.toggle('rm-preview', e.target.checked);
 
 /* ================================================================ */
 /* ================================================================
@@ -1306,10 +1268,7 @@ const FLOW_WORD = { waiting: 'Waiting', running: 'In progress', done: 'Done', st
 S.view = 'stage'; S.flowSig = '';
 function flowHTML(f){
   const agents = {};
-  for (const a of f.agents){
-    if (a.emblemSvg){ const k = svgKey(S.focus, a); CUSTOM[k] = a.emblemSvg; agents[a.name] = { ...a, emblem: k }; }
-    else agents[a.name] = a;
-  }
+  for (const a of f.agents) agents[a.name] = applyEmblem({ ...a }, S.focus);
   const ids = new Set(); f.edges.forEach(e => { ids.add(e.from); ids.add(e.to); });
   const names = [...ids];
   if (!names.length) return `<div class="flow-empty"><h3>No handoffs yet</h3><p>A handoff shows up here when an agent leaves another a mission (a file <code>agent-missions/&lt;them&gt;-&lt;topic&gt;.md</code> that starts with <code>from: &lt;you&gt;</code>), when a trigger queues a run, or when you send a task from an agent's panel. Anything nobody picks up turns red.</p></div>`;
@@ -1382,8 +1341,7 @@ async function sendMsg(){
   }catch(err){ S.msgErr = err.message; S.msgSig = ''; }
   renderPanel(); refetch();
 }
-$('#panel').addEventListener('click', e => { if (e.target.closest('[data-msg-send]')) sendMsg(); });
-$('#panel').addEventListener('keydown', e => { if (e.target.id === 'msgIn' && e.key === 'Enter' && (e.metaKey || e.ctrlKey)){ e.preventDefault(); sendMsg(); } });
+function onMsgClick(e){ if (e.target.closest('[data-msg-send]')) sendMsg(); }
 
 /* ================================================================
    TRIGGERS (in the agent panel)
@@ -1413,7 +1371,7 @@ function trigHTML(a, key){
 }
 function syncTrig(){ const k = $('#tgKind')?.value; document.querySelectorAll('[data-tg]').forEach(el => { el.hidden = el.dataset.tg !== k; }); }
 $('#panel').addEventListener('change', e => { if (e.target.id === 'tgKind') syncTrig(); });
-$('#panel').addEventListener('click', async e => {
+async function onTrigClick(e){
   const t = e.target, name = S.panel?.agent, key = S.focus + '/' + name;
   if (t.closest('[data-trig-add]')){ S.trigEdit = key; S.trigErr = ''; S.trigDraft = null; await renderPanel(); return $('#tgTask')?.focus(); }
   if (t.closest('[data-trig-cancel]')){ S.trigEdit = null; S.trigErr = ''; S.trigDraft = null; return renderPanel(); }
@@ -1426,6 +1384,14 @@ $('#panel').addEventListener('click', async e => {
     try{ await api.addTrigger(S.focus, name, body); S.trigEdit = null; S.trigErr = ''; S.trigDraft = null; await refetch(); toast(`Trigger added for <code>${esc(name)}</code>. It queues a run; start it with <code>/board:watch</code> or <code>/board:run</code>.`); }
     catch(err){ S.trigErr = err.message; S.trigDraft = body; renderPanel(); }
   }
+}
+
+/* the side panel: one click handler and one keydown handler for every section in it */
+$('#panel').addEventListener('click', e => { onPanelClick(e); onMsgClick(e); onTrigClick(e); });
+$('#panel').addEventListener('keydown', e => {
+  if (e.key !== 'Enter' || !(e.metaKey || e.ctrlKey)) return;
+  if (e.target.id === 'taskIn'){ e.preventDefault(); startRun(); }
+  else if (e.target.id === 'msgIn'){ e.preventDefault(); sendMsg(); }
 });
 
 function render(){ $('#commitsBtn').hidden = data()?.git === false; renderStrip(); renderBay(); renderFlow(); renderPanel(); }

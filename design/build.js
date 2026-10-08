@@ -61,9 +61,6 @@ function emitChange(){ clearTimeout(refetchTimer); refetchTimer = setTimeout(ref
 
 `);
 
-// 2. demo-only controls
-rep(`        <label><input type="checkbox" id="launcherToggle"><span>Launcher unavailable<small>Demo: shows the copy-to-Claude-Code fallback in Run.</small></span></label>\n`, '');
-rep(`$('#launcherToggle').onchange = e => { S.launcherDown = e.target.checked; };\n`, '');
 
 // 3. type help must match the tools the server really grants (every agent needs Write for its status file and notes)
 rep(`const TYPE_HELP = { Researcher:'Tools: Read, Grep, Glob, WebSearch · no file writes', Reviewer:'Tools: Read, Grep, Glob · comments only, no edits', Builder:'Tools: Read, Edit, Write, Bash · writes inside its scope', Operator:'Tools: whatever your Claude session has, including connected apps · for work that is not code' };`,
@@ -90,9 +87,6 @@ rep("placeholder=\"What should it do?\"", "placeholder=\"What should it do? It i
 rep("<p>Launching from here isn't set up, so run it in Claude Code instead. Paste this:</p>", "<p>Queued. In your Claude Code session run <code>/board:run ${esc(a.name)}</code>, or paste this sentence instead:</p>");
 rep("try { await api.run(S.focus, name, task); }\n  catch(err){ S.fallback[key] = task.replace(/\\.$/, ''); S.runKey = ''; renderPanel(); announce('Launcher unavailable. Copy the sentence into Claude Code.'); }",
     "try { await api.run(S.focus, name, task); S.fallback[key] = task.replace(/\\.$/, ''); S.runKey = ''; renderPanel(); announce('Queued. Run /board:run in Claude Code.'); }\n  catch(err){ S.runErr[key] = err.message; S.runKey = ''; renderPanel(); }");
-// the demo's fake progress stream has no real data behind it
-rep("<ul class=\"stream\" id=\"pStream\" aria-live=\"polite\"></ul>", '');
-rep("    $('#pStream').innerHTML = log.map((s, i) => `<li class=\"${i === log.length - 1 ? 'now' : ''}\">${esc(s)}</li>`).join('');\n    $('#pStream').scrollTop = 1e6;\n", '');
 // pending requests shown with the other facts
 rep("${a.missions ? `<dt>Missions</dt><dd>${a.missions} waiting</dd>` : ''}</dl>`;", "${a.missions ? `<dt>Missions</dt><dd>${a.missions} waiting</dd>` : ''}${a.requests ? `<dt>Queued</dt><dd>${a.requests} request${a.requests > 1 ? 's' : ''} waiting for Claude Code</dd>` : ''}</dl>`;");
 

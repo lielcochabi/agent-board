@@ -62,6 +62,10 @@ The JARVIS project has its own folder mapping (plans, QA, research, reviews...) 
 
 Registered projects and agent emblems are stored in `projects.json` (machine-specific, gitignored).
 
+## Tests
+
+`npm test` starts the real server on a spare port with throwaway data and project folders, then checks the API, the drawn-icon sanitizer, triggers (including firing), the flow view, imports, connectors, messages, the hooks and the watcher script. It touches nothing outside the OS temp folder and takes about a minute.
+
 ## Design
 
 `design/agent-board.design.html` is the untouched Claude Design reference (runs standalone with mock data). `design/build.js` turns it into `public/index.html` by swapping the mock layer for the real API: run `node design/build.js` after changing either. `DESIGN-PROMPT.md` is the prompt that produced it.

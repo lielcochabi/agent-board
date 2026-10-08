@@ -162,6 +162,17 @@ const writeStatus = (root, n, st, step = 'working') => { fs.mkdirSync(path.join(
   check('lists project and user apps by name', cn.servers.map(s => s.tool).sort().join() === 'mcp__gmail,mcp__shopify');
   check('never returns secrets, commands or urls', !/SECRET|token|npx|command|https?:/i.test(cnRaw));
   check('unknown project', (await get('/api/connectors?project=nope')).status === 404);
+  fs.writeFileSync(path.join(PROJ, '.mcp.json'), JSON.stringify({ mcpServers: { shopify: {}, stripe: {} } }));
+  check('a changed .mcp.json shows up without a restart', (await get('/api/connectors?project=proj')).servers.some(s => s.tool === 'mcp__stripe'));
+  fs.writeFileSync(path.join(HOME, '.claude.json'), JSON.stringify({ mcpServers: { slack: {} } }));
+  check('a changed user settings file shows up too', (await get('/api/connectors?project=proj')).servers.some(s => s.tool === 'mcp__slack') && !(await get('/api/connectors?project=proj')).servers.some(s => s.tool === 'mcp__gmail'));
+
+  section('commits');
+  fs.writeFileSync(path.join(PROJ, 'c.txt'), '3'); git(PROJ, 'add', '.'); git(PROJ, 'commit', '-m', 'scout: add a file');
+  await sleep(8200); // the commit list is cached for a few seconds
+  const commits = (await state('proj')).commits;
+  check('commits are listed and tagged with the agent that made them', commits.length >= 2 && commits[0].agent === 'scout' && commits[0].message === 'scout: add a file', commits[0]);
+  check('repeated reads inside the cache window agree', JSON.stringify((await state('proj')).commits) === JSON.stringify(commits));
 
   section('outputs');
   fs.mkdirSync(path.join(NOGIT, 'docs', 'seller'), { recursive: true });

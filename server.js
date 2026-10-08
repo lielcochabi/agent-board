@@ -58,6 +58,19 @@ const agentsDir = p => path.join(p.root, '.claude', 'agents');
 const promptsDir = p => path.join(p.root, 'agent-prompts');
 const requestsDir = p => path.join(p.root, 'agent-requests');
 
+// ---------- small shared helpers ----------
+const stamp = (d = new Date()) => d.toISOString().replace(/[-:]/g, '').replace(/\..*/, '');
+const projectOf = b => getProject(clean(b.project, 60));
+const agentFile = (p, name) => path.join(agentsDir(p), `${name}.md`);
+const agentExists = (p, name) => validName(name) && fs.existsSync(agentFile(p, name));
+// One run-request file: header lines (agent, requested, source, run, status), a line with ---, then the task text.
+function parseRequest(text) {
+  text = String(text);
+  const cut = /^---\s*$/m.exec(text), head = cut ? text.slice(0, cut.index) : text;
+  const field = k => ((new RegExp('^' + k + ':\\s*(\\S+)', 'm').exec(head) || [])[1] || '');
+  return { agent: field('agent').toLowerCase(), source: field('source').toLowerCase(), run: field('run'), requested: Date.parse(field('requested')) || 0, task: cut ? text.slice(cut.index + cut[0].length).trim() : '' };
+}
+
 // ---------- reading ----------
 function parseStatus(text) {
   const out = {};
@@ -93,6 +106,11 @@ function walk(dir, base = '') {
 const EMBLEMS = ['scout', 'compass', 'forge', 'echo', 'sentry', 'warden', 'herald', 'scribe', 'custodian', 'orb'];
 // No tools line means the agent inherits everything the session has (connectors included), which is what a non-code operator is.
 const agentType = tools => !tools || /mcp__/.test(tools) ? 'Operator' : /\bEdit\b/.test(tools) ? 'Builder' : /WebSearch|WebFetch/.test(tools || '') ? 'Researcher' : 'Reviewer';
+// Just the agent names (frontmatter name, else file name): cheap, for places that do not need states.
+function agentNames(p) {
+  let files = []; try { files = fs.readdirSync(agentsDir(p)).filter(f => f.endsWith('.md')); } catch {}
+  return files.map(f => { try { return parseFrontmatter(fs.readFileSync(path.join(agentsDir(p), f), 'utf8')).name || f.replace(/\.md$/, ''); } catch { return f.replace(/\.md$/, ''); } });
+}
 function readAgents(p) {
   let names = [];
   try { names = fs.readdirSync(agentsDir(p)).filter(f => f.endsWith('.md')); } catch {}
@@ -124,16 +142,26 @@ function readAgents(p) {
   const rank = n => { const i = p.order.indexOf(n); return i < 0 ? 999 : i; };
   return agents.sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name));
 }
+// Which agent an output file belongs to, by the rule of the folder it sits in.
+function outputAgent(r, rel, agentNames) {
+  if (r.agent === 'mission') { const m = rel.match(/^([a-z0-9-]+?)-/i); return m ? m[1].toLowerCase() : null; }
+  if (r.agent === 'folder') { const seg = rel.split('/')[0].toLowerCase(); return agentNames.includes(seg) ? seg : null; }
+  return r.agent;
+}
+// Name, kind and agent of one output id, without walking every output folder.
+function describeOutput(p, id) {
+  const rest = id.slice(id.indexOf(':') + 1), i = rest.indexOf('/'), key = rest.slice(0, i), rel = rest.slice(i + 1);
+  const f = (p.files || []).find(x => x.key === key);
+  if (f) return { name: path.basename(f.file), kind: f.label, agent: f.agent };
+  const r = p.outputs.find(x => x.key === key);
+  return r ? { name: rel, kind: r.label, agent: outputAgent(r, rel, agentNames(p)) } : {};
+}
 function readOutputs(p, agentNames) {
   const list = [];
   for (const r of p.outputs) {
     for (const rel of walk(r.dir)) {
       const st = fs.statSync(path.join(r.dir, rel));
-      let agent = null;
-      if (r.agent === 'mission') { const m = rel.match(/^([a-z0-9-]+?)-/i); agent = m ? m[1].toLowerCase() : null; }
-      else if (r.agent === 'folder') { const seg = rel.split('/')[0].toLowerCase(); agent = agentNames.includes(seg) ? seg : null; }
-      else agent = r.agent;
-      list.push({ id: `${p.id}:${r.key}/${rel}`, name: rel, kind: r.label, agent, mtime: st.mtimeMs, size: st.size });
+      list.push({ id: `${p.id}:${r.key}/${rel}`, name: rel, kind: r.label, agent: outputAgent(r, rel, agentNames), mtime: st.mtimeMs, size: st.size });
     }
   }
   for (const f of p.files || []) {
@@ -157,15 +185,21 @@ function resolveFile(id) {
   const full = path.resolve(r.dir, rel);
   return full.startsWith(path.resolve(r.dir) + path.sep) ? full : null;
 }
-function gitLog(p, names, cb) {
+const gitCache = new Map();
+function gitRows(p, cb) {
+  const hit = gitCache.get(p.id);
+  if (hit && Date.now() - hit.at < 8000) return cb(hit.rows); // a refetch burst should not spawn git again and again
   execFile('git', ['log', '--pretty=format:%h\t%an\t%at\t%s', '-20'], { cwd: p.repo || p.root, timeout: 4000 }, (err, out) => {
-    if (err) return cb([]);
-    cb(out.split('\n').filter(Boolean).map(l => {
-      const [hash, author, at, subject] = l.split('\t');
-      const m = subject.match(/^([A-Za-z-]+):/), tag = m && m[1].toLowerCase();
-      return { hash, message: subject, agent: names.includes(tag) ? tag : author, time: Number(at) * 1000 };
-    }));
+    const rows = err ? [] : out.split('\n').filter(Boolean).map(l => { const [hash, author, at, subject] = l.split('\t'); return { hash, author, subject, time: Number(at) * 1000 }; });
+    gitCache.set(p.id, { at: Date.now(), rows });
+    cb(rows);
   });
+}
+function gitLog(p, names, cb) {
+  gitRows(p, rows => cb(rows.map(r => {
+    const m = r.subject.match(/^([A-Za-z-]+):/), tag = m && m[1].toLowerCase();
+    return { hash: r.hash, message: r.subject, agent: names.includes(tag) ? tag : r.author, time: r.time };
+  })));
 }
 
 // ---------- creating ----------
@@ -177,6 +211,18 @@ const PRESETS = {
 };
 // Connected apps the board can see: names only, read from the project's .mcp.json and the user's Claude settings.
 // It never reads or returns commands, URLs or tokens, and it never writes these files.
+const serverCache = new Map();
+// Names of the MCP servers in one Claude settings file, cached until the file changes. Commands, urls and tokens are never kept.
+function serverNames(file) {
+  let st; try { st = fs.statSync(file); } catch { return { top: [], byProject: {} }; }
+  const hit = serverCache.get(file);
+  if (hit && hit.mtime === st.mtimeMs && hit.size === st.size) return hit.v;
+  let j = null; try { j = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
+  const names = o => Object.keys((o && o.mcpServers) || {});
+  const v = { top: names(j), byProject: Object.fromEntries(Object.entries((j && j.projects) || {}).map(([k, x]) => [k, names(x)])) };
+  serverCache.set(file, { mtime: st.mtimeMs, size: st.size, v });
+  return v;
+}
 function readConnectors(p) {
   const out = [], seen = new Set();
   const add = (name, source) => {
@@ -184,15 +230,11 @@ function readConnectors(p) {
     seen.add(name);
     out.push({ name, tool: 'mcp__' + name.replace(/[^A-Za-z0-9_-]/g, '_'), source });
   };
-  const read = f => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
-  const proj = read(path.join(p.root, '.mcp.json'));
-  Object.keys((proj && proj.mcpServers) || {}).forEach(n => add(n, 'this project'));
-  const user = read(path.join(os.homedir(), '.claude.json'));
-  if (user) {
-    const key = [p.root, p.root.replace(/\\/g, '/')].find(k => (user.projects || {})[k]);
-    Object.keys((key && user.projects[key].mcpServers) || {}).forEach(n => add(n, 'this project'));
-    Object.keys(user.mcpServers || {}).forEach(n => add(n, 'your Claude settings'));
-  }
+  serverNames(path.join(p.root, '.mcp.json')).top.forEach(n => add(n, 'this project'));
+  const user = serverNames(path.join(os.homedir(), '.claude.json'));
+  const key = [p.root, p.root.replace(/\\/g, '/')].find(k => user.byProject[k]);
+  (key ? user.byProject[key] : []).forEach(n => add(n, 'this project'));
+  user.top.forEach(n => add(n, 'your Claude settings'));
   return out;
 }
 const OPERATOR_BASE = 'Read, Grep, Glob, Write, Edit, Bash, WebSearch, WebFetch';
@@ -298,11 +340,11 @@ function writeIconRequest(p, name, role, goal, brief) {
 
 // Ask Claude for a (new) icon. The old one stays until a new file replaces it.
 function redrawIcon(b) {
-  const p = getProject(clean(b.project, 60));
+  const p = projectOf(b);
   if (!p) return { error: 'Pick a project first.' };
   const name = clean(b.name, 40);
-  const defPath = path.join(agentsDir(p), `${name}.md`);
-  if (!validName(name) || !fs.existsSync(defPath)) return { error: `There is no agent named "${name}" in ${p.name}.` };
+  const defPath = agentFile(p, name);
+  if (!agentExists(p, name)) return { error: `There is no agent named "${name}" in ${p.name}.` };
   const fm = parseFrontmatter(fs.readFileSync(defPath, 'utf8'));
   const m = (p.meta || {})[name] || {};
   const role = m.role || (fm.description || '').split('.')[0] || name;
@@ -396,7 +438,7 @@ const metaOf = f => ({ emblem: f.emblem, type: f.type, tools: f.toolsCustom, run
 const validName = n => /^[a-z][a-z0-9-]{1,29}$/.test(n);
 
 function createAgent(b) {
-  const p = getProject(clean(b.project, 60));
+  const p = projectOf(b);
   if (!p) return { error: 'Pick a project first.' };
   const name = clean(b.name, 40);
   if (!validName(name)) return { error: 'Name must be 2 to 30 characters: lowercase letters, numbers and dashes, starting with a letter.' };
@@ -422,10 +464,10 @@ function createAgent(b) {
 
 // Only agents created from the board can be edited: their form values are stored, so nothing hand-written is overwritten.
 function editableAgent(b) {
-  const p = getProject(clean(b.project, 60));
+  const p = projectOf(b);
   if (!p) return { error: 'Pick a project first.' };
   const name = clean(b.name, 40);
-  if (!validName(name) || !fs.existsSync(path.join(agentsDir(p), `${name}.md`))) return { error: `There is no agent named "${name}" in ${p.name}.` };
+  if (!agentExists(p, name)) return { error: `There is no agent named "${name}" in ${p.name}.` };
   const m = (p.meta || {})[name];
   if (!m || !m.goal) return { error: `"${name}" was written by hand, so the board will not overwrite it. Edit .claude/agents/${name}.md instead.` };
   return { p, name, m };
@@ -455,7 +497,7 @@ function updateAgent(b) {
 
 // Remove moves the agent's files into <project>/agent-removed/<name>-<time>/ so nothing is lost. Outputs and commits stay.
 function removeAgent(b) {
-  const p = getProject(clean(b.project, 60));
+  const p = projectOf(b);
   if (!p) return { error: 'Pick a project first.' };
   const name = clean(b.name, 40);
   if (!validName(name)) return { error: 'Bad agent name.' };
@@ -463,7 +505,7 @@ function removeAgent(b) {
   if (!fs.existsSync(defPath)) return { error: `There is no agent named "${name}" in ${p.name}.` };
   const a = readAgents(p).find(x => x.name === name);
   if (a && a.state === 'running' && Date.now() - a.updated < 15 * 60 * 1000) return { error: `${name} is running. Wait for it to finish first.` };
-  const dest = path.join(p.root, 'agent-removed', `${name}-${new Date().toISOString().replace(/[-:]/g, '').replace(/\..*/, '')}`);
+  const dest = path.join(p.root, 'agent-removed', `${name}-${stamp()}`);
   try {
     fs.mkdirSync(dest, { recursive: true });
     for (const src of [defPath, path.join(promptsDir(p), `${name}.md`), path.join(statusDir(p), `${name}.md`), path.join(emblemsDir(p), `${name}.svg`), iconRequestFile(p, name), spaceDir(p, name)]) {
@@ -481,7 +523,7 @@ function removeAgent(b) {
 // A run request is just a file in <project>/agent-requests/. The server never starts anything:
 // the board plugin in Claude Code reads the queue and runs the agent inside the user's own session.
 function createRequest(b) {
-  const p = getProject(clean(b.project, 60));
+  const p = projectOf(b);
   if (!p) return { error: 'Pick a project first.' };
   const agent = clean(b.agent, 40);
   if (!readAgents(p).some(a => a.name === agent)) return { error: `There is no agent named "${agent}" in ${p.name}.` };
@@ -496,13 +538,13 @@ function createRequest(b) {
     // a trigger must not pile up identical requests while nobody has picked the last one up
     try {
       for (const f of fs.readdirSync(dir).filter(f => f.startsWith(agent + '-') && f.endsWith('.md'))) {
-        const old = fs.readFileSync(path.join(dir, f), 'utf8');
-        if (old.includes('source: ' + source + '\n') && old.endsWith('---\n' + task + '\n')) return { error: 'That request is already queued.' };
+        const old = parseRequest(fs.readFileSync(path.join(dir, f), 'utf8'));
+        if (old.source === source && old.task === task) return { error: 'That request is already queued.' };
       }
     } catch {}
   }
   const now = new Date();
-  const file = path.join(dir, `${agent}-${now.toISOString().replace(/[-:]/g, '').replace(/\..*/, '')}-${Math.random().toString(36).slice(2, 6)}.md`);
+  const file = path.join(dir, `${agent}-${stamp(now)}-${Math.random().toString(36).slice(2, 6)}.md`);
   try {
     fs.mkdirSync(dir, { recursive: true });
     const text = ['agent: ' + agent, 'requested: ' + now.toISOString(), ...(source ? ['source: ' + source] : []), ...(((p.meta || {})[agent] || {}).runAs === 'chat' ? ['run: chat'] : []), 'status: pending', '---', task, ''].join('\n');
@@ -530,7 +572,7 @@ function triggerLabel(t) {
 }
 
 function addTrigger(b) {
-  const p = getProject(clean(b.project, 60));
+  const p = projectOf(b);
   if (!p) return { error: 'Pick a project first.' };
   const agent = clean(b.agent, 40);
   const names = readAgents(p).map(a => a.name);
@@ -566,7 +608,7 @@ function addTrigger(b) {
   return { ok: true, id: t.id };
 }
 function findTrigger(b) {
-  const p = getProject(clean(b.project, 60));
+  const p = projectOf(b);
   const t = p && (p.triggers || []).find(x => x.id === clean(b.id, 20));
   return t ? { p, t } : null;
 }
@@ -686,12 +728,11 @@ function buildFlow(p) {
       const full = path.join(dir, f), head = readHead(full);
       let at = 0; try { at = fs.statSync(full).mtimeMs; } catch { continue; }
       if (done && now - at > 24 * HOUR) continue;
-      const to = ((/^agent:\s*(\S+)/m.exec(head) || [])[1] || '').toLowerCase();
-      if (!to) continue;
-      const src = ((/^source:\s*(\S+)/m.exec(head) || [])[1] || 'you').toLowerCase();
+      const rq = parseRequest(head);
+      if (!rq.agent) continue;
+      const to = rq.agent, src = rq.source || 'you';
       const from = src.startsWith('after:') ? src.slice(6) : src;
-      const task = head.split(/^---\s*$/m)[1] || '';
-      const requested = Date.parse((/^requested:\s*(\S+)/m.exec(head) || [])[1]) || at;
+      const task = rq.task, requested = rq.requested || at;
       const st = done ? statusFor(to, requested) : (now - requested > HOUR / 2 ? { status: 'stuck', note: `Queued ${Math.round((now - requested) / 60000)} min ago. Run /board:run in Claude Code.` } : { status: 'waiting', note: 'Queued. Waiting for Claude Code.' });
       if (done && st.status === 'waiting') st.status = 'done'; // it was started when it moved to done/
       addEdge('r:' + f, from, to, 'request', task.trim().split('\n')[0] || 'Run request', requested, st);
@@ -699,11 +740,9 @@ function buildFlow(p) {
   }
   edges.sort((a, b) => b.at - a.at);
   edges.length = Math.min(edges.length, 40);
-  const actors = [...new Set(edges.map(e => e.from).filter(n => !byName[n]))];
   return {
     agents: agents.map(a => ({ name: a.name, state: a.state, emblem: a.emblem, emblemSvg: a.emblemSvg, step: a.step })),
-    actors, edges,
-    triggers: (p.triggers || []).map(t => ({ id: t.id, agent: t.agent, label: triggerLabel(t), enabled: t.enabled })),
+    edges,
   };
 }
 
@@ -730,7 +769,7 @@ function spaceSummary(p, name) {
   return { count: ins.length + outs.length, last: Math.max(0, lastOut, ...ins.map(m => m.at)), unanswered: ins.filter(m => m.at > lastOut).length };
 }
 function readThread(b) {
-  const p = getProject(clean(b.project, 60)), name = clean(b.name, 40);
+  const p = projectOf(b), name = clean(b.name, 40);
   if (!p || !validName(name)) return { error: 'No such agent.' };
   const msgs = [...spaceFiles(p, name, 'in'), ...spaceFiles(p, name, 'out')].sort((a, c) => a.at - c.at).slice(-30);
   const items = msgs.map(m => {
@@ -741,12 +780,12 @@ function readThread(b) {
   return { ok: true, items };
 }
 function sendMessage(b) {
-  const p = getProject(clean(b.project, 60)), name = clean(b.agent, 40);
-  if (!p || !validName(name) || !fs.existsSync(path.join(agentsDir(p), `${name}.md`))) return { error: 'There is no such agent.' };
+  const p = projectOf(b), name = clean(b.agent, 40);
+  if (!p || !agentExists(p, name)) return { error: 'There is no such agent.' };
   const text = String(b.text || '').trim().slice(0, 4000);
   if (text.length < 1) return { error: 'Write a message first.' };
-  const now = new Date(), stamp = now.toISOString().replace(/[-:]/g, '').replace(/\..*/, '');
-  const file = path.join(spaceDir(p, name), 'inbox', `${stamp}-${Math.random().toString(36).slice(2, 6)}-you.md`);
+  const now = new Date();
+  const file = path.join(spaceDir(p, name), 'inbox', `${stamp(now)}-${Math.random().toString(36).slice(2, 6)}-you.md`);
   try {
     ensureSpace(p, name);
     fs.writeFileSync(file, ['from: you', 'at: ' + now.toISOString(), '---', text, ''].join('\n'), { flag: 'wx' });
@@ -809,7 +848,7 @@ function adoptImport(b) {
   if (!it) return { error: 'That item is no longer in the import list. Run /board:import again.' };
   const r = createAgent({ ...b, tools: b.tools });
   if (r.error) return r;
-  const p = getProject(clean(b.project, 60));
+  const p = projectOf(b);
   p.meta[r.name].origin = { kind: it.kind, title: it.title, link: it.link };
   saveProjects();
   let trigger = '';
@@ -852,8 +891,13 @@ function watch(dir, recursive = true) {
 function watchProject(p) {
   [statusDir(p), agentsDir(p), requestsDir(p), emblemsDir(p), path.join(p.root, 'agent-space'), ...p.outputs.map(o => o.dir)].forEach(d => watch(d));
   (p.files || []).forEach(f => watch(path.dirname(f.file), false));
-  watch(p.root, false); // catches output folders being created later
+  watch(p.root, false);
+  if (!rootWatched.has(p.id)) { // a folder created later (agent-status, agent-space...) starts being watched too
+    rootWatched.add(p.id);
+    try { fs.watch(p.root, () => watchProject(p)); } catch {}
+  }
 }
+const rootWatched = new Set();
 projects.forEach(watchProject);
 
 // ---------- http ----------
@@ -920,7 +964,7 @@ http.createServer((req, res) => {
     if (!full) return json(res, { error: 'not found' }, 404);
     try {
       const id = url.searchParams.get('id'), p = getProject(id.slice(0, id.indexOf(':')));
-      const meta = readOutputs(p, readAgents(p).map(a => a.name)).find(o => o.id === id) || {};
+      const meta = describeOutput(p, id);
       const raw = fs.readFileSync(full, 'utf8'), cap = 400000;
       return json(res, { id, name: meta.name || path.basename(full), kind: meta.kind || 'Docs', agent: meta.agent || null, mtime: fs.statSync(full).mtimeMs, text: raw.slice(0, cap), truncated: raw.length > cap });
     }

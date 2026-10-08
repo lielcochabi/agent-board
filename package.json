@@ -1,7 +1,7 @@
 {
-  "name": "jarvis-agent-board",
+  "name": "agent-board",
   "version": "0.1.0",
   "private": true,
-  "description": "Local web app showing live status and output of the JARVIS agents",
+  "description": "Local board that follows your Claude agents across projects and lets you work with them",
   "scripts": { "start": "node server.js", "test": "node test/run.js" }
 }
