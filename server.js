@@ -4,7 +4,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { execFile } = require('child_process');
+const { execFile, execFileSync } = require('child_process');
 
 const PORT = Number(process.env.PORT) || 4747;
 const PUBLIC = path.join(__dirname, 'public');
@@ -116,7 +116,8 @@ function readAgents(p) {
              updated: mt || (isNaN(parsed) ? 0 : parsed), output: dash(s.output),
              editable: !!meta.goal,
              missions: missionFiles.filter(m => m.toLowerCase().startsWith(name + '-')).length,
-             requests: requestFiles.filter(m => m.toLowerCase().startsWith(name + '-')).length };
+             requests: requestFiles.filter(m => m.toLowerCase().startsWith(name + '-')).length,
+             triggers: (p.triggers || []).filter(t => t.agent === name).map(t => ({ id: t.id, kind: t.kind, label: triggerLabel(t), task: t.task, enabled: t.enabled, last: t.last || 0, lastError: t.lastError || '' })) };
   });
   const rank = n => { const i = p.order.indexOf(n); return i < 0 ? 999 : i; };
   return agents.sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name));
@@ -442,6 +443,7 @@ function removeAgent(b) {
       if (fs.existsSync(src)) fs.renameSync(src, path.join(dest, path.basename(path.dirname(src)) + '-' + path.basename(src)));
     }
     if (p.meta) delete p.meta[name];
+    p.triggers = (p.triggers || []).filter(t => t.agent !== name && t.after !== name);
     p.order = (p.order || []).filter(n => n !== name);
     saveProjects();
   } catch (e) { return { error: `Could not remove the agent: ${e.code || e.message}` }; }
@@ -462,15 +464,220 @@ function createRequest(b) {
   let pending = 0;
   try { pending = fs.readdirSync(dir).filter(f => f.startsWith(agent + '-') && f.endsWith('.md')).length; } catch {}
   if (pending >= 10) return { error: `${agent} already has ${pending} requests waiting. Run /board:run in Claude Code first.` };
+  const source = clean(b.source, 60).toLowerCase().replace(/[^a-z0-9:-]/g, '');
+  if (source) {
+    // a trigger must not pile up identical requests while nobody has picked the last one up
+    try {
+      for (const f of fs.readdirSync(dir).filter(f => f.startsWith(agent + '-') && f.endsWith('.md'))) {
+        const old = fs.readFileSync(path.join(dir, f), 'utf8');
+        if (old.includes('source: ' + source + '\n') && old.endsWith('---\n' + task + '\n')) return { error: 'That request is already queued.' };
+      }
+    } catch {}
+  }
   const now = new Date();
   const file = path.join(dir, `${agent}-${now.toISOString().replace(/[-:]/g, '').replace(/\..*/, '')}-${Math.random().toString(36).slice(2, 6)}.md`);
   try {
     fs.mkdirSync(dir, { recursive: true });
-    const text = ['agent: ' + agent, 'requested: ' + now.toISOString(), 'status: pending', '---', task, ''].join('\n');
+    const text = ['agent: ' + agent, 'requested: ' + now.toISOString(), ...(source ? ['source: ' + source] : []), 'status: pending', '---', task, ''].join('\n');
     fs.writeFileSync(file, text, { flag: 'wx' });
   } catch (e) { return { error: `Could not queue the request: ${e.code || e.message}` }; }
   watch(dir); broadcast();
   return { ok: true, queued: path.basename(file), command: `/board:run ${agent}` };
+}
+
+// ---------- triggers ----------
+// A trigger watches for something and, when it happens, queues a run request for its agent (the same file the Run box writes).
+// Nothing starts by itself: a Claude Code session that is running /board:watch (or you, with /board:run) starts the agent.
+const TRIGGER_KINDS = ['every', 'daily', 'commit', 'file', 'after'];
+const TRIGGER_LIMIT = 20;
+const triggerSource = t => (t.kind === 'after' ? `after:${t.after}` : t.kind === 'every' || t.kind === 'daily' ? 'schedule' : t.kind);
+function triggerLabel(t) {
+  switch (t.kind) {
+    case 'every': return t.every % 60 === 0 ? `Every ${t.every / 60} h` : `Every ${t.every} min`;
+    case 'daily': return `Every day at ${t.at}`;
+    case 'commit': return 'When a new commit lands';
+    case 'file': return `When a new file appears in ${t.dir}${t.ext ? ` (${t.ext})` : ''}`;
+    case 'after': return `After ${t.after} finishes`;
+  }
+  return t.kind;
+}
+
+function addTrigger(b) {
+  const p = getProject(clean(b.project, 60));
+  if (!p) return { error: 'Pick a project first.' };
+  const agent = clean(b.agent, 40);
+  const names = readAgents(p).map(a => a.name);
+  if (!names.includes(agent)) return { error: `There is no agent named "${agent}" in ${p.name}.` };
+  const kind = clean(b.kind, 20);
+  if (!TRIGGER_KINDS.includes(kind)) return { error: 'Pick when it should start.' };
+  const task = String(b.task || '').trim().slice(0, 2000);
+  if (task.length < 3) return { error: 'Say what the agent should do when this happens.' };
+  if ((p.triggers || []).length >= TRIGGER_LIMIT) return { error: `A project can have ${TRIGGER_LIMIT} triggers. Remove one first.` };
+  const t = { id: Math.random().toString(36).slice(2, 10), agent, kind, task, enabled: true, created: Date.now(), last: 0, base: null };
+  if (kind === 'every') {
+    t.every = Math.round(Number(b.every));
+    if (!(t.every >= 5 && t.every <= 10080)) return { error: 'Repeat every 5 minutes up to 7 days (10080 minutes).' };
+  } else if (kind === 'daily') {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(clean(b.at, 10));
+    if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) return { error: 'Give a time like 09:30.' };
+    t.at = `${m[1].padStart(2, '0')}:${m[2]}`;
+  } else if (kind === 'file') {
+    const dir = clean(b.dir, 200).replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    if (!dir || dir.split('/').includes('..') || /^[A-Za-z]:/.test(dir)) return { error: 'Give a folder inside the project, like inbox or docs/orders.' };
+    const full = path.resolve(p.root, dir);
+    if (full !== path.resolve(p.root) && !full.startsWith(path.resolve(p.root) + path.sep)) return { error: 'That folder is outside the project.' };
+    const ext = clean(b.ext, 40).toLowerCase().replace(/[^a-z0-9,]/g, '');
+    t.dir = dir; t.ext = ext;
+  } else if (kind === 'after') {
+    const after = clean(b.after, 40);
+    if (!names.includes(after)) return { error: 'Pick the agent to wait for.' };
+    if (after === agent) return { error: 'An agent cannot wait for itself.' };
+    t.after = after;
+  }
+  p.triggers = [...(p.triggers || []), t];
+  saveProjects(); broadcast();
+  return { ok: true, id: t.id };
+}
+function findTrigger(b) {
+  const p = getProject(clean(b.project, 60));
+  const t = p && (p.triggers || []).find(x => x.id === clean(b.id, 20));
+  return t ? { p, t } : null;
+}
+function removeTrigger(b) {
+  const r = findTrigger(b);
+  if (!r) return { error: 'That trigger no longer exists.' };
+  r.p.triggers = r.p.triggers.filter(x => x !== r.t);
+  saveProjects(); broadcast();
+  return { ok: true };
+}
+function toggleTrigger(b) {
+  const r = findTrigger(b);
+  if (!r) return { error: 'That trigger no longer exists.' };
+  r.t.enabled = b.enabled !== false;
+  if (r.t.enabled) { r.t.base = null; r.t.created = Date.now(); r.t.last = 0; } // start fresh, do not replay what happened while it was off
+  saveProjects(); broadcast();
+  return { ok: true };
+}
+
+function headSha(p) {
+  try { return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: p.repo || p.root, timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); }
+  catch { return ''; }
+}
+function newestMtime(dir, exts) {
+  let best = 0, seen = 0;
+  const visit = (d, depth) => {
+    let list = [];
+    try { list = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of list) {
+      if (++seen > 2000) return;
+      const full = path.join(d, e.name);
+      if (e.isDirectory()) { if (depth < 3 && !e.name.startsWith('.')) visit(full, depth + 1); continue; }
+      if (exts.length && !exts.includes(path.extname(e.name).slice(1).toLowerCase())) continue;
+      try { best = Math.max(best, fs.statSync(full).mtimeMs); } catch {}
+    }
+  };
+  visit(dir, 0);
+  return best;
+}
+
+const lastStates = {};
+function evalTriggers() {
+  const now = Date.now();
+  for (const p of projects) {
+    if (!(p.triggers || []).length) continue;
+    const agents = readAgents(p);
+    const cur = Object.fromEntries(agents.map(a => [a.name, a.state]));
+    const prev = lastStates[p.id];
+    lastStates[p.id] = cur;
+    let dirty = false;
+    for (const t of p.triggers) {
+      if (!t.enabled || !cur[t.agent]) continue;
+      let fire = false;
+      if (t.kind === 'every') fire = now - (t.last || t.created) >= t.every * 60000;
+      else if (t.kind === 'daily') {
+        const [h, m] = t.at.split(':').map(Number), slot = new Date(); slot.setHours(h, m, 0, 0);
+        fire = now >= slot.getTime() && Math.max(t.last || 0, t.created) < slot.getTime();
+      } else if (t.kind === 'commit') {
+        const sha = headSha(p);
+        if (t.base === null) { t.base = sha; dirty = true; }
+        else if (sha && sha !== t.base) { t.base = sha; fire = true; dirty = true; }
+      } else if (t.kind === 'file') {
+        const newest = newestMtime(path.resolve(p.root, t.dir), t.ext ? t.ext.split(',').filter(Boolean) : []);
+        if (t.base === null) { t.base = newest; dirty = true; }
+        else if (newest > t.base) { t.base = newest; fire = true; dirty = true; }
+      } else if (t.kind === 'after') fire = !!prev && prev[t.after] === 'running' && cur[t.after] === 'done';
+      if (!fire) continue;
+      const r = createRequest({ project: p.id, agent: t.agent, task: t.task, source: triggerSource(t) });
+      t.last = now; t.lastError = r.error || ''; dirty = true;
+    }
+    if (dirty) { saveProjects(); broadcast(); }
+  }
+}
+setInterval(evalTriggers, Number(process.env.BOARD_TICK_MS) || 20000);
+setTimeout(evalTriggers, 1500); // sets the baselines right after start
+
+// ---------- flow (who handed what to whom) ----------
+// Built from files only: missions agents leave each other, run requests (typed in the board or queued by triggers), and agent states.
+const HOUR = 3600 * 1000;
+function readHead(file) {
+  try { return fs.readFileSync(file, 'utf8').slice(0, 3000); } catch { return ''; }
+}
+function buildFlow(p) {
+  const agents = readAgents(p);
+  const byName = Object.fromEntries(agents.map(a => [a.name, a]));
+  const now = Date.now();
+  const edges = [];
+  const statusFor = (to, at) => {
+    const a = byName[to];
+    if (!a) return { status: 'waiting', note: '' };
+    const handled = a.updated >= at;
+    if (handled && a.state === 'running') return { status: 'running', note: `${to} is working on it` };
+    if (handled && a.state === 'done') return { status: 'done', note: '' };
+    if (handled && (a.state === 'blocked' || a.state === 'failed')) return { status: 'stuck', note: `${to} is ${a.state === 'blocked' ? 'waiting on you' : 'failed'}${a.step ? `: ${a.step}` : ''}` };
+    if (now - at > HOUR) return { status: 'stuck', note: `${to} has not picked this up in ${Math.round((now - at) / HOUR)} h` };
+    return { status: 'waiting', note: '' };
+  };
+  const addEdge = (id, from, to, kind, what, at, st) => edges.push({ id, from, to, kind, what: String(what).slice(0, 140), at, ...st });
+
+  const missionRoot = p.outputs.find(o => o.key === 'missions');
+  if (missionRoot) {
+    for (const rel of walk(missionRoot.dir)) {
+      if (/^(done|archive)\//i.test(rel) || /\/(done|archive)\//i.test(rel)) continue;
+      const base = rel.split('/').pop();
+      const to = agents.map(a => a.name).filter(n => base.toLowerCase().startsWith(n + '-')).sort((a, b) => b.length - a.length)[0];
+      if (!to) continue;
+      const full = path.join(missionRoot.dir, rel), head = readHead(full);
+      let at = 0; try { at = fs.statSync(full).mtimeMs; } catch { continue; }
+      const from = ((/^\s*from\s*:\s*([A-Za-z0-9-]+)/im.exec(head.split('\n').slice(0, 6).join('\n')) || [])[1] || 'you').toLowerCase();
+      const title = (/^#\s+(.+)$/m.exec(head) || [])[1] || base.replace(/\.[a-z]+$/i, '').slice(to.length + 1).replace(/-/g, ' ');
+      addEdge('m:' + rel, from, to, 'mission', title, at, statusFor(to, at));
+    }
+  }
+  for (const [dir, done] of [[requestsDir(p), false], [path.join(requestsDir(p), 'done'), true]]) {
+    let files = []; try { files = fs.readdirSync(dir).filter(f => f.endsWith('.md')); } catch {}
+    for (const f of files) {
+      const full = path.join(dir, f), head = readHead(full);
+      let at = 0; try { at = fs.statSync(full).mtimeMs; } catch { continue; }
+      if (done && now - at > 24 * HOUR) continue;
+      const to = ((/^agent:\s*(\S+)/m.exec(head) || [])[1] || '').toLowerCase();
+      if (!to) continue;
+      const src = ((/^source:\s*(\S+)/m.exec(head) || [])[1] || 'you').toLowerCase();
+      const from = src.startsWith('after:') ? src.slice(6) : src;
+      const task = head.split(/^---\s*$/m)[1] || '';
+      const requested = Date.parse((/^requested:\s*(\S+)/m.exec(head) || [])[1]) || at;
+      const st = done ? statusFor(to, requested) : (now - requested > HOUR / 2 ? { status: 'stuck', note: `Queued ${Math.round((now - requested) / 60000)} min ago. Run /board:run in Claude Code.` } : { status: 'waiting', note: 'Queued. Waiting for Claude Code.' });
+      if (done && st.status === 'waiting') st.status = 'done'; // it was started when it moved to done/
+      addEdge('r:' + f, from, to, 'request', task.trim().split('\n')[0] || 'Run request', requested, st);
+    }
+  }
+  edges.sort((a, b) => b.at - a.at);
+  edges.length = Math.min(edges.length, 40);
+  const actors = [...new Set(edges.map(e => e.from).filter(n => !byName[n]))];
+  return {
+    agents: agents.map(a => ({ name: a.name, state: a.state, emblem: a.emblem, emblemSvg: a.emblemSvg, step: a.step })),
+    actors, edges,
+    triggers: (p.triggers || []).map(t => ({ id: t.id, agent: t.agent, label: triggerLabel(t), enabled: t.enabled })),
+  };
 }
 
 function createProject(b) {
@@ -533,7 +740,7 @@ http.createServer((req, res) => {
     if (!originOk(req)) return json(res, { error: 'Request blocked.' }, 403);
     return readBody(req, body => {
       if (!body) return json(res, { error: 'Bad request.' }, 400);
-      const act = { '/api/agents': createAgent, '/api/agents/update': updateAgent, '/api/agents/remove': removeAgent, '/api/agents/icon': redrawIcon }[url.pathname];
+      const act = { '/api/agents': createAgent, '/api/agents/update': updateAgent, '/api/agents/remove': removeAgent, '/api/agents/icon': redrawIcon, '/api/triggers': addTrigger, '/api/triggers/remove': removeTrigger, '/api/triggers/toggle': toggleTrigger }[url.pathname];
       if (act) { const r = act(body); return json(res, r, r.error ? 400 : 200); }
       if (url.pathname === '/api/projects') { const r = createProject(body); return json(res, r, r.error ? 400 : 200); }
       if (url.pathname === '/api/requests') { const r = createRequest(body); return json(res, r, r.error ? 400 : 200); }
@@ -541,6 +748,10 @@ http.createServer((req, res) => {
     });
   }
 
+  if (url.pathname === '/api/flow') {
+    const p = getProject(url.searchParams.get('project') || '');
+    return p ? json(res, buildFlow(p)) : json(res, { error: 'No such project.' }, 404);
+  }
   if (url.pathname === '/api/agent') {
     const r = getAgentForm({ project: url.searchParams.get('project') || '', name: url.searchParams.get('name') || '' });
     return json(res, r, r.error ? 404 : 200);

@@ -294,6 +294,44 @@ button{cursor:pointer}
 .doclist .new .dn::after{content:" new";color:var(--signal);font-size:11px}
 .muted{color:var(--ink-3);font-size:13px}
 .doc{font-size:14.5px;line-height:1.7;color:var(--ink)}
+.flow{grid-row:2;min-height:0;overflow:auto;padding:20px 40px 64px}
+.flow-sum{display:flex;gap:16px;font:400 12px/1 var(--mono);color:var(--ink-3);margin:0 0 14px}
+.flow-sum .run{color:var(--signal)}.flow-sum .blk{color:var(--amber)}.flow-sum .fail{color:var(--red)}
+.flow-wrap{overflow:auto;border:1px solid var(--line);border-radius:var(--r-md);background:var(--bay);padding:8px}
+.flow-graph{position:relative}
+.flow-graph svg{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}
+.edge{fill:none;stroke-width:1.5}
+.edge.waiting{stroke:var(--amber);stroke-dasharray:4 4}
+.edge.running{stroke:var(--signal);stroke-dasharray:6 6;animation:flowdash 1.2s linear infinite}
+.edge.done{stroke:var(--ink-3);opacity:.6}
+.edge.stuck{stroke:var(--red)}
+.ah.waiting path{fill:var(--amber)}.ah.running path{fill:var(--signal)}.ah.done path{fill:var(--ink-3)}.ah.stuck path{fill:var(--red)}
+@keyframes flowdash{to{stroke-dashoffset:-12}}
+@media (prefers-reduced-motion:reduce){.edge.running{animation:none}}
+.fnode{position:absolute;width:96px;display:grid;justify-items:center;gap:4px;text-align:center;background:none;border:none;color:var(--ink);padding:0;--size:44px}
+.fnode .fname{font:500 12px/1.2 var(--sans)}
+.fnode .fstate{font:400 11px/1 var(--mono);color:var(--ink-3)}
+.fnode.actor{margin-top:10px;padding:10px 6px;border:1px dashed var(--line-2);border-radius:var(--r-md);color:var(--ink-2)}
+.handoffs{list-style:none;margin:20px 0 0;padding:0;display:grid;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--r-md);overflow:hidden}
+.ho{display:grid;grid-template-columns:minmax(120px,.8fr) minmax(0,2fr) auto;gap:6px 16px;align-items:center;padding:10px 14px;background:var(--bay);font-size:13px}
+.ho-what{color:var(--ink-2);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ho-meta{display:flex;gap:10px;align-items:center;font-size:12px}
+.ho-note{grid-column:1/-1;font:400 12px/1.4 var(--mono);color:var(--ink-3)}
+.ho.stuck .ho-note{color:var(--red)}
+.ho-pill.stuck{color:var(--red);border-color:color-mix(in srgb,var(--red) 50%,transparent)}
+.ho-pill.waiting{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 50%,transparent)}
+.ho-pill.running{color:var(--signal);border-color:color-mix(in srgb,var(--signal) 50%,transparent)}
+.flow-empty{border:1px dashed var(--line-2);border-radius:var(--r-md);padding:28px;color:var(--ink-2);max-width:640px}
+.flow-empty h3{margin:0 0 8px;font:600 15px/1.3 var(--sans);color:var(--ink)}
+.flow-idle{margin-top:14px}
+.trigs{list-style:none;margin:0 0 12px;padding:0;display:grid;gap:8px}
+.trigs li{display:flex;gap:10px;justify-content:space-between;align-items:flex-start;padding:10px 12px;border:1px solid var(--line);border-radius:var(--r-md);background:var(--bay)}
+.trigs li.off{opacity:.6}
+.t-main{display:grid;gap:3px;min-width:0;font-size:13px}
+.t-main span{color:var(--ink-2)}
+.t-main .muted{font-size:12px}
+.err{color:var(--red);font-size:12px;margin:6px 0 0}
+.tgform{display:grid;gap:12px;margin:8px 0}
 .doc-pre{white-space:pre-wrap;word-break:break-word;font:400 12.5px/1.6 var(--mono);color:var(--ink-2);margin:0}
 .doc h1{font:600 19px/1.3 var(--sans);margin:0 0 14px}
 .doc h2{font:600 15px/1.3 var(--sans);margin:22px 0 8px}
@@ -408,6 +446,9 @@ dialog.sheet[open]{animation:sheetIn .24s var(--ease)}
         <div class="bay-attn" id="bayAttn" aria-live="polite"></div>
       </div>
       <div class="bay-actions">
+        <button class="btn ghost" id="flowBtn" aria-pressed="false">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="3" cy="4" r="1.8"/><circle cx="13" cy="8" r="1.8"/><circle cx="3" cy="12" r="1.8"/><path d="M4.8 4.4L11.2 7.6M4.8 11.6L11.2 8.4"/></svg>
+          <span>Flow</span></button>
         <button class="btn ghost" id="commitsBtn">
           <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="2.5"/><path d="M1 8h4.5M10.5 8H15"/></svg>
           Commits</button>
@@ -425,6 +466,7 @@ dialog.sheet[open]{animation:sheetIn .24s var(--ease)}
       </div>
       <div class="empty" id="empty" hidden></div>
     </div>
+    <section class="flow" id="flow" hidden aria-label="Flow"></section>
   </main>
 </div>
 
@@ -746,6 +788,10 @@ const api = {
   async redrawIcon(project, name, brief){
     if (!USE_MOCK){ const r = await post('/api/agents/icon', { project, name, brief }); if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Request failed'); }
   },
+  async flow(project){ if (USE_MOCK) return { agents: [], actors: [], edges: [], triggers: [] }; return j('/api/flow?project=' + encodeURIComponent(project)); },
+  async addTrigger(project, agent, t){ if (USE_MOCK) throw new Error('Triggers need the board server.'); const r = await post('/api/triggers', { project, agent, ...t }); const x = await r.json().catch(() => ({})); if (!r.ok) throw new Error(x.error || 'Request failed'); },
+  async removeTrigger(project, id){ if (!USE_MOCK) await post('/api/triggers/remove', { project, id }); },
+  async toggleTrigger(project, id, enabled){ if (!USE_MOCK) await post('/api/triggers/toggle', { project, id, enabled }); },
   async removeAgent(project, name){
     if (!USE_MOCK){ const r = await post('/api/agents/remove', { project, name }); if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Request failed'); return; }
     const l = MOCK.state[project].agents; l.splice(l.findIndex(x => x.name === name), 1); emitChange();
@@ -1113,8 +1159,8 @@ async function renderPanel(){
   if (S.headKey !== hk){
     S.headKey = hk;
     head.innerHTML = `${embWrap(a.emblem, a.state)}<div class="p-title"><h2>${esc(a.name)}</h2><div class="sub">${esc(a.role)}</div></div>${CLOSE_BTN}`;
-    body.innerHTML = `<section class="p-sec" id="pFacts"></section><section class="p-sec" id="pRun" aria-label="Run"></section><section class="p-sec" id="pDocs"></section><section class="p-sec" id="pManage" aria-label="Manage"></section>`;
-    S.runKey = '';
+    body.innerHTML = `<section class="p-sec" id="pFacts"></section><section class="p-sec" id="pRun" aria-label="Run"></section><section class="p-sec" id="pDocs"></section><section class="p-sec" id="pTrig" aria-label="Triggers"></section><section class="p-sec" id="pManage" aria-label="Manage"></section>`;
+    S.runKey = ''; S.trigSig = '';
   }
   head.querySelector('.emb-wrap').dataset.state = a.state;
   // facts
@@ -1163,6 +1209,8 @@ async function renderPanel(){
   $('#pDocs').innerHTML = `<p class="p-label">Outputs · ${docs.length}</p>` + (docs.length
     ? `<ul class="doclist">${docs.map(d => `<li class="${S.justDone?.[key] === d.id ? 'new' : ''}"><button data-doc="${esc(d.id)}"><span class="kind">${esc(d.kind)}</span><span class="dn">${esc(d.name)}</span><span class="dt" title="${abs(d.mtime)}">${ago(d.mtime)}</span></button></li>`).join('')}</ul>`
     : `<p class="muted">Nothing written yet. Outputs appear here as ${esc(a.name)} saves them.</p>`);
+  const tsig = JSON.stringify([a.name, a.triggers, S.trigEdit === key, S.trigErr, S.trigDraft, (data().agents || []).length]);
+  if (S.trigSig !== tsig){ S.trigSig = tsig; $('#pTrig').innerHTML = trigHTML(a, key); if (S.trigEdit === key) syncTrig(); }
   // manage: edit / remove (remove asks first and only moves files aside)
   const busy = a.state === 'running';
   const iconNote = a.iconPending ? `<p class="muted" style="margin-top:8px">Its icon is waiting to be drawn. That happens the first time ${esc(a.name)} runs, or when you run <code>/board:icons</code> in Claude Code.</p>`
@@ -1313,7 +1361,112 @@ $('#launcherToggle').onchange = e => { S.launcherDown = e.target.checked; };
 $('#motionToggle').onchange = e => document.documentElement.classList.toggle('rm-preview', e.target.checked);
 
 /* ================================================================ */
-function render(){ $('#commitsBtn').hidden = data()?.git === false; renderStrip(); renderBay(); renderPanel(); }
+/* ================================================================
+   FLOW: who handed what to whom (missions, run requests, triggers)
+   ================================================================ */
+const ACTOR_LABEL = { you: 'You', schedule: 'Schedule', commit: 'Git commit', file: 'New file' };
+const FLOW_WORD = { waiting: 'Waiting', running: 'In progress', done: 'Done', stuck: 'Stuck' };
+S.view = 'stage'; S.flowSig = '';
+function flowHTML(f){
+  const agents = {};
+  for (const a of f.agents){
+    if (a.emblemSvg){ const k = svgKey(S.focus, a); CUSTOM[k] = a.emblemSvg; agents[a.name] = { ...a, emblem: k }; }
+    else agents[a.name] = a;
+  }
+  const ids = new Set(); f.edges.forEach(e => { ids.add(e.from); ids.add(e.to); });
+  const names = [...ids];
+  if (!names.length) return `<div class="flow-empty"><h3>No handoffs yet</h3><p>A handoff shows up here when an agent leaves another a mission (a file <code>agent-missions/&lt;them&gt;-&lt;topic&gt;.md</code> that starts with <code>from: &lt;you&gt;</code>), when a trigger queues a run, or when you send a task from an agent's panel. Anything nobody picks up turns red.</p></div>`;
+  const lvl = Object.fromEntries(names.map(n => [n, 0]));
+  for (let i = 0; i < names.length; i++) for (const e of f.edges){
+    if (e.from !== e.to && agents[e.to] && lvl[e.to] < lvl[e.from] + 1 && lvl[e.from] + 1 < names.length) lvl[e.to] = lvl[e.from] + 1;
+  }
+  const cols = []; names.forEach(n => (cols[lvl[n]] = cols[lvl[n]] || []).push(n));
+  const W = 200, RH = 112, NW = 96, pos = {};
+  cols.forEach((c, ci) => (c || []).forEach((n, ri) => { pos[n] = { x: ci * W + 16, y: ri * RH + 12 }; }));
+  const width = cols.length * W, height = Math.max(...cols.map(c => (c || []).length)) * RH + 12;
+  const paths = f.edges.map(e => {
+    const a = pos[e.from], b = pos[e.to]; if (!a || !b) return '';
+    const d = b.x > a.x
+      ? `M${a.x + NW} ${a.y + 34} C${a.x + NW + 60} ${a.y + 34} ${b.x - 60} ${b.y + 34} ${b.x} ${b.y + 34}`
+      : `M${a.x + NW / 2} ${a.y + 76} C${a.x + NW / 2} ${a.y + 128} ${b.x + NW / 2} ${b.y - 50} ${b.x + NW / 2} ${b.y - 2}`;
+    return `<path class="edge ${e.status}" d="${d}" marker-end="url(#ah-${e.status})"><title>${esc(e.from)} to ${esc(e.to)}: ${esc(e.what)}</title></path>`;
+  }).join('');
+  const markers = Object.keys(FLOW_WORD).map(s => `<marker id="ah-${s}" class="ah ${s}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L8 4 L0 8 z"/></marker>`).join('');
+  const nodes = names.map(n => {
+    const a = agents[n], p = pos[n];
+    return a
+      ? `<button class="fnode" data-flow-agent="${esc(n)}" style="left:${p.x}px;top:${p.y}px">${embWrap(a.emblem, a.state)}<span class="fname">${esc(n)}</span><span class="fstate">${STATE_WORD[a.state]}</span></button>`
+      : `<span class="fnode actor" style="left:${p.x}px;top:${p.y}px"><span class="fname">${esc(ACTOR_LABEL[n] || n)}</span></span>`;
+  }).join('');
+  const rank = { stuck: 0, running: 1, waiting: 2, done: 3 };
+  const edges = [...f.edges].sort((x, y) => rank[x.status] - rank[y.status] || y.at - x.at);
+  const n = s => f.edges.filter(e => e.status === s).length;
+  const sum = [n('stuck') ? `<span class="fail">${n('stuck')} stuck</span>` : '', n('waiting') ? `<span class="blk">${n('waiting')} waiting</span>` : '', n('running') ? `<span class="run">${n('running')} in progress</span>` : '', n('done') ? `<span>${n('done')} done</span>` : ''].filter(Boolean).join('');
+  const list = edges.map(e => `<li class="ho ${e.status}"><span class="ho-flow"><b>${esc(ACTOR_LABEL[e.from] || e.from)}</b> → <b>${esc(e.to)}</b></span><span class="ho-what">${esc(e.what)}</span><span class="ho-meta"><span class="state-pill ho-pill ${e.status}">${FLOW_WORD[e.status]}</span><span class="muted">${e.kind === 'mission' ? 'mission' : 'run request'} · ${ago(e.at)}</span></span>${e.note ? `<span class="ho-note">${esc(e.note)}</span>` : ''}</li>`).join('');
+  const idle = f.agents.filter(a => !ids.has(a.name)).map(a => esc(a.name));
+  return `<div class="flow-sum">${sum}</div>
+    <div class="flow-wrap"><div class="flow-graph" style="width:${width}px;height:${height}px"><svg width="${width}" height="${height}" aria-hidden="true"><defs>${markers}</defs>${paths}</svg>${nodes}</div></div>
+    <ul class="handoffs" aria-label="Handoffs">${list}</ul>
+    ${idle.length ? `<p class="muted flow-idle">No handoffs for ${idle.join(', ')}.</p>` : ''}`;
+}
+async function renderFlow(){
+  const on = S.view === 'flow';
+  $('#stage').hidden = on; $('#flow').hidden = !on;
+  $('#flowBtn').setAttribute('aria-pressed', String(on));
+  $('#flowBtn span').textContent = on ? 'Agents' : 'Flow';
+  if (!on) return;
+  let f; try { f = await api.flow(S.focus); } catch { return; }
+  if (S.view !== 'flow') return;
+  const sig = S.focus + JSON.stringify(f);
+  if (sig !== S.flowSig){ S.flowSig = sig; $('#flow').innerHTML = flowHTML(f); }
+}
+$('#flowBtn').onclick = () => { S.view = S.view === 'flow' ? 'stage' : 'flow'; S.flowSig = ''; renderFlow(); };
+$('#flow').addEventListener('click', e => { const b = e.target.closest('[data-flow-agent]'); if (b) openPanel({ mode:'agent', agent:b.dataset.flowAgent }, b); });
+
+/* ================================================================
+   TRIGGERS (in the agent panel)
+   ================================================================ */
+const TRIG_KINDS = [['every','Every so many minutes'],['daily','Every day at a time'],['commit','A new commit lands'],['file','A new file appears'],['after','Another agent finishes']];
+S.trigEdit = null; S.trigErr = ''; S.trigDraft = null; S.trigSig = '';
+function trigHTML(a, key){
+  const list = a.triggers || [], d = S.trigDraft || {};
+  let h = `<p class="p-label">Triggers · ${list.length}</p>`;
+  h += list.length
+    ? `<ul class="trigs">${list.map(t => `<li class="${t.enabled ? '' : 'off'}"><div class="t-main"><b>${esc(t.label)}</b><span>${esc(t.task)}</span>${t.lastError ? `<span class="err">${esc(t.lastError)}</span>` : ''}<span class="muted">${t.enabled ? (t.last ? 'Last queued ' + ago(t.last) : 'Not fired yet') : 'Paused'}</span></div><div class="manage"><button class="btn ghost" data-trig-toggle="${esc(t.id)}" data-on="${t.enabled}">${t.enabled ? 'Pause' : 'Resume'}</button><button class="btn ghost" data-trig-del="${esc(t.id)}" aria-label="Remove this trigger">Remove</button></div></li>`).join('')}</ul>`
+    : `<p class="muted">Nothing starts ${esc(a.name)} automatically.</p>`;
+  if (S.trigEdit === key){
+    const others = (data().agents || []).filter(x => x.name !== a.name);
+    h += `<div class="tgform">
+      <div class="field"><label for="tgKind">Queue a run when</label><select id="tgKind">${TRIG_KINDS.map(([v, l]) => `<option value="${v}" ${d.kind === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      <div class="field" data-tg="every"><label for="tgEvery">Minutes between runs <span class="opt">· 5 or more</span></label><input id="tgEvery" type="number" min="5" value="${esc(d.every || 60)}"></div>
+      <div class="field" data-tg="daily" hidden><label for="tgAt">Time of day</label><input id="tgAt" type="time" value="${esc(d.at || '09:00')}"></div>
+      <div class="field" data-tg="file" hidden><label for="tgDir">Folder inside the project</label><input id="tgDir" placeholder="inbox" value="${esc(d.dir || '')}"></div>
+      <div class="field" data-tg="file" hidden><label for="tgExt">File types <span class="opt">· optional, like csv,json</span></label><input id="tgExt" value="${esc(d.ext || '')}"></div>
+      <div class="field" data-tg="after" hidden><label for="tgAfter">Wait for</label><select id="tgAfter">${others.map(x => `<option value="${esc(x.name)}" ${d.after === x.name ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></div>
+      <div class="field"><label for="tgTask">What should it do then?</label><textarea id="tgTask" rows="2" placeholder="e.g. Check the new orders and flag anything odd.">${esc(d.task || '')}</textarea></div>
+      ${S.trigErr ? `<p class="err">${esc(S.trigErr)}</p>` : ''}
+      <div class="manage"><button class="btn primary" data-trig-save>Add trigger</button><button class="btn ghost" data-trig-cancel>Cancel</button></div></div>`;
+  } else h += `<button class="btn" data-trig-add>+ Add trigger</button>`;
+  return h + `<p class="muted" style="margin-top:10px">A trigger queues a run. Claude Code starts it: run <code>/board:watch</code> in a session and queued runs start while that session is open.</p>`;
+}
+function syncTrig(){ const k = $('#tgKind')?.value; document.querySelectorAll('[data-tg]').forEach(el => { el.hidden = el.dataset.tg !== k; }); }
+$('#panel').addEventListener('change', e => { if (e.target.id === 'tgKind') syncTrig(); });
+$('#panel').addEventListener('click', async e => {
+  const t = e.target, name = S.panel?.agent, key = S.focus + '/' + name;
+  if (t.closest('[data-trig-add]')){ S.trigEdit = key; S.trigErr = ''; S.trigDraft = null; await renderPanel(); return $('#tgTask')?.focus(); }
+  if (t.closest('[data-trig-cancel]')){ S.trigEdit = null; S.trigErr = ''; S.trigDraft = null; return renderPanel(); }
+  const del = t.closest('[data-trig-del]');
+  if (del){ try{ await api.removeTrigger(S.focus, del.dataset.trigDel); }catch(err){ toast(esc(err.message)); } return refetch(); }
+  const tog = t.closest('[data-trig-toggle]');
+  if (tog){ try{ await api.toggleTrigger(S.focus, tog.dataset.trigToggle, tog.dataset.on !== 'true'); }catch(err){ toast(esc(err.message)); } return refetch(); }
+  if (t.closest('[data-trig-save]')){
+    const body = { kind: $('#tgKind').value, every: $('#tgEvery').value, at: $('#tgAt').value, dir: $('#tgDir').value.trim(), ext: $('#tgExt').value.trim(), after: $('#tgAfter')?.value || '', task: $('#tgTask').value.trim() };
+    try{ await api.addTrigger(S.focus, name, body); S.trigEdit = null; S.trigErr = ''; S.trigDraft = null; await refetch(); toast(`Trigger added for <code>${esc(name)}</code>. It queues a run; start it with <code>/board:watch</code> or <code>/board:run</code>.`); }
+    catch(err){ S.trigErr = err.message; S.trigDraft = body; renderPanel(); }
+  }
+});
+
+function render(){ $('#commitsBtn').hidden = data()?.git === false; renderStrip(); renderBay(); renderFlow(); renderPanel(); }
 setInterval(() => { renderBay(); if (S.panel?.mode === 'agent') renderPanel(); }, 30000);
 refetch();
 </script>

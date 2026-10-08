@@ -18,5 +18,8 @@ You are a dedicated agent on the {{project}} project (folder: {{root}}). This fi
 3. Keep your status file up to date (see your agent definition): first action and last action.
 4. Be honest about confidence: separate "verified by running it", "verified by reading it" and "not verified".
 
+## Handing work to another agent
+To give another agent a task, write `agent-missions/<their-name>-<topic>.md`. Make its first line `from: {{name}}`, then a `# title` line and the details. The board draws this as a handoff from you to them, and shows it as stuck if they do not pick it up.
+
 ## Output
 Write deliverables to docs/{{name}}/ (reports as .md, data as .csv or .json) and end with a short report: what you did, what is unverified, what needs the user.

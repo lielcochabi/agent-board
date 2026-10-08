@@ -39,6 +39,10 @@ const api = {
   async updateAgent(project, a){ await post('/api/agents/update', { project, ...a }); },
   async removeAgent(project, name){ await post('/api/agents/remove', { project, name }); },
   async redrawIcon(project, name, brief){ await post('/api/agents/icon', { project, name, brief }); },
+  flow: id => j('/api/flow?project=' + encodeURIComponent(id)),
+  async addTrigger(project, agent, t){ await post('/api/triggers', { project, agent, ...t }); },
+  async removeTrigger(project, id){ await post('/api/triggers/remove', { project, id }); },
+  async toggleTrigger(project, id, enabled){ await post('/api/triggers/toggle', { project, id, enabled }); },
   async createProject(p){ return (await post('/api/projects', p)).id; }
 };
 
