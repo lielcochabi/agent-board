@@ -332,6 +332,11 @@ button{cursor:pointer}
 .t-main .muted{font-size:12px}
 .err{color:var(--red);font-size:12px;margin:6px 0 0}
 .tgform{display:grid;gap:12px;margin:8px 0}
+.conn{display:flex;flex-wrap:wrap;gap:6px 14px;padding:2px 0}
+.conn label{display:inline-flex;gap:6px;align-items:center;font-size:13px;color:var(--ink-2)}
+.field .conn input{width:16px;height:16px;padding:0;flex:none}
+.conn small{white-space:nowrap}
+.conn small{color:var(--ink-3);font-size:11px}
 .doc-pre{white-space:pre-wrap;word-break:break-word;font:400 12.5px/1.6 var(--mono);color:var(--ink-2);margin:0}
 .doc h1{font:600 19px/1.3 var(--sans);margin:0 0 14px}
 .doc h2{font:600 15px/1.3 var(--sans);margin:22px 0 8px}
@@ -503,7 +508,7 @@ dialog.sheet[open]{animation:sheetIn .24s var(--ease)}
       <details class="adv" id="advanced">
         <summary>Advanced</summary>
         <div class="adv-body">
-          <div class="field"><label for="fTools">Tools <span class="opt">· optional, replaces the type's list</span></label><input id="fTools" class="mono" placeholder="e.g. Read, Write, WebSearch, mcp__shopify"><span class="help">Comma separated. Connected apps appear as names starting with <code class="mono">mcp__</code>.</span></div>
+          <div class="field"><label for="fTools">Tools <span class="opt">· optional, replaces the type's list</span></label><input id="fTools" class="mono" placeholder="e.g. Read, Write, WebSearch, mcp__shopify"><div class="conn" id="connList" hidden></div><span class="help">Comma separated. Ticking an app adds its <code class="mono">mcp__</code> name; Claude then also keeps the type's normal file tools. <span id="connNote"></span></span></div>
           <div class="field"><label for="fRole">Role <span class="opt">· short label, defaults to the goal</span></label><input id="fRole" placeholder="e.g. Docs keeper"></div>
           <div class="field"><label for="fWhen">When should it be used <span class="opt">· helps Claude Code pick it</span></label><input id="fWhen" placeholder="Defaults to the goal"></div>
           <div class="field"><label for="fScope">Write scope <span class="opt">· optional</span></label><input id="fScope" class="mono" placeholder="docs/<name>/ and agent-missions/"></div>
@@ -788,6 +793,7 @@ const api = {
   async redrawIcon(project, name, brief){
     if (!USE_MOCK){ const r = await post('/api/agents/icon', { project, name, brief }); if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Request failed'); }
   },
+  async connectors(project){ if (USE_MOCK) return { servers: [] }; return j('/api/connectors?project=' + encodeURIComponent(project)); },
   async flow(project){ if (USE_MOCK) return { agents: [], actors: [], edges: [], triggers: [] }; return j('/api/flow?project=' + encodeURIComponent(project)); },
   async addTrigger(project, agent, t){ if (USE_MOCK) throw new Error('Triggers need the board server.'); const r = await post('/api/triggers', { project, agent, ...t }); const x = await r.json().catch(() => ({})); if (!r.ok) throw new Error(x.error || 'Request failed'); },
   async removeTrigger(project, id){ if (!USE_MOCK) await post('/api/triggers/remove', { project, id }); },
@@ -1277,6 +1283,26 @@ function setFieldError(wrapId, errId, msg){ const w = $('#' + wrapId); w.classLi
 let editing = null; // agent name while the sheet is in edit mode
 const SHEET_FIELDS = ['fwName', 'fwGoal', 'fwPrompt'];
 function syncCustom(){ $('#fwPrompt').hidden = !$('#fCustom').checked; }
+const connTokens = () => $('#fTools').value.split(',').map(x => x.trim()).filter(Boolean);
+function syncConn(){ const have = new Set(connTokens()); document.querySelectorAll('#connList input').forEach(c => { c.checked = have.has(c.dataset.tool); }); }
+async function loadConnectors(pid){
+  const host = $('#connList'); host.hidden = true; host.innerHTML = '';
+  let list = []; try{ list = (await api.connectors(pid)).servers || []; }catch{}
+  host.innerHTML = list.map(c => `<label><input type="checkbox" data-tool="${esc(c.tool)}"> ${esc(c.name)} <small>${esc(c.source)}</small></label>`).join('');
+  host.hidden = !list.length;
+  $('#connNote').textContent = list.length
+    ? "Only apps listed in this project's .mcp.json or your Claude settings show here. Connectors you added in the Claude app are not visible to the board: type their tool names above (the Connectors settings in the Claude app shows what is connected)."
+    : "No apps found in this project's .mcp.json or your Claude settings. Connect an app first (Connectors settings in the Claude app, or a .mcp.json file); apps added in the Claude app can be typed here by their mcp__ name.";
+  syncConn();
+}
+$('#connList').addEventListener('change', e => {
+  const t = e.target.dataset?.tool; if (!t) return;
+  const next = connTokens().filter(x => x !== t); if (e.target.checked) next.push(t);
+  $('#fTools').value = next.join(', ');
+  if (next.length) $('#advanced').open = true;
+});
+$('#fTools').addEventListener('input', syncConn);
+$('#fProject').addEventListener('change', () => loadConnectors($('#fProject').value));
 async function openAgentSheet(editName){
   const f = $('#agentForm'); f.reset(); editing = editName || null;
   SHEET_FIELDS.forEach(id => setFieldError(id));
@@ -1299,6 +1325,7 @@ async function openAgentSheet(editName){
   $('#fIcon').value = '';
   $('#iconLbl').innerHTML = editing ? 'New icon <span class="opt">· optional, leave empty to keep the current one</span>' : 'Icon <span class="opt">· optional</span>';
   $('#typeHelp').textContent = TYPE_HELP[document.querySelector('input[name=type]:checked').value];
+  loadConnectors($('#fProject').value);
   $('#agentSheet').showModal(); (editing ? $('#fGoal') : $('#fName')).focus();
 }
 $('#agentForm').addEventListener('change', e => {

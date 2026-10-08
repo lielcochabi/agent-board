@@ -4,6 +4,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { execFile, execFileSync } = require('child_process');
 
 const PORT = Number(process.env.PORT) || 4747;
@@ -173,6 +174,27 @@ const PRESETS = {
   Builder: 'Read, Grep, Glob, Bash, Write, Edit',
   Operator: '', // no tools line: uses whatever the session has, including connected apps
 };
+// Connected apps the board can see: names only, read from the project's .mcp.json and the user's Claude settings.
+// It never reads or returns commands, URLs or tokens, and it never writes these files.
+function readConnectors(p) {
+  const out = [], seen = new Set();
+  const add = (name, source) => {
+    if (!/^[\w .-]{1,60}$/.test(name) || seen.has(name)) return;
+    seen.add(name);
+    out.push({ name, tool: 'mcp__' + name.replace(/[^A-Za-z0-9_-]/g, '_'), source });
+  };
+  const read = f => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
+  const proj = read(path.join(p.root, '.mcp.json'));
+  Object.keys((proj && proj.mcpServers) || {}).forEach(n => add(n, 'this project'));
+  const user = read(path.join(os.homedir(), '.claude.json'));
+  if (user) {
+    const key = [p.root, p.root.replace(/\\/g, '/')].find(k => (user.projects || {})[k]);
+    Object.keys((key && user.projects[key].mcpServers) || {}).forEach(n => add(n, 'this project'));
+    Object.keys(user.mcpServers || {}).forEach(n => add(n, 'your Claude settings'));
+  }
+  return out;
+}
+const OPERATOR_BASE = 'Read, Grep, Glob, Write, Edit, Bash, WebSearch, WebFetch';
 const isGit = p => fs.existsSync(path.join(p.repo || p.root, '.git'));
 const RESERVED = ['claude', 'explore', 'plan', 'general-purpose', 'statusline-setup', 'claude-code-guide'];
 const clean = (s, max) => String(s == null ? '' : s).replace(/[\r\n\t]+/g, ' ').trim().slice(0, max);
@@ -301,7 +323,8 @@ function agentFields(b, name) {
   if (!Object.prototype.hasOwnProperty.call(PRESETS, b.type)) return { error: 'Pick what the agent may do.' };
   const toolsCustom = clean(b.tools, 400);
   if (toolsCustom && !/^[A-Za-z0-9_*:(),. -]+$/.test(toolsCustom)) return { error: 'Tools can only contain letters, numbers, commas and names like mcp__shop.' };
-  const tools = toolsCustom || PRESETS[b.type];
+  const onlyConnectors = toolsCustom && toolsCustom.split(',').every(t => !t.trim() || t.trim().startsWith('mcp__'));
+  const tools = onlyConnectors ? (PRESETS[b.type] || OPERATOR_BASE) + ', ' + toolsCustom : toolsCustom || PRESETS[b.type];
   const custom = b.custom === true;
   const prompt = custom ? String(b.prompt || '').trim().slice(0, 20000) : '';
   if (custom && prompt.length < 10) return { error: 'Write the prompt, or switch off "Write the whole prompt myself".' };
@@ -748,6 +771,10 @@ http.createServer((req, res) => {
     });
   }
 
+  if (url.pathname === '/api/connectors') {
+    const p = getProject(url.searchParams.get('project') || '');
+    return p ? json(res, { servers: readConnectors(p) }) : json(res, { error: 'No such project.' }, 404);
+  }
   if (url.pathname === '/api/flow') {
     const p = getProject(url.searchParams.get('project') || '');
     return p ? json(res, buildFlow(p)) : json(res, { error: 'No such project.' }, 404);
