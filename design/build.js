@@ -57,8 +57,8 @@ rep(`        <label><input type="checkbox" id="launcherToggle"><span>Launcher un
 rep(`$('#launcherToggle').onchange = e => { S.launcherDown = e.target.checked; };\n`, '');
 
 // 3. type help must match the tools the server really grants (every agent needs Write for its status file and notes)
-rep(`const TYPE_HELP = { Researcher:'Tools: Read, Grep, Glob, WebSearch · no file writes', Reviewer:'Tools: Read, Grep, Glob · comments only, no edits', Builder:'Tools: Read, Edit, Write, Bash · writes inside its scope' };`,
-    `const TYPE_HELP = { Researcher:'Tools: Read, Grep, Glob, Bash, WebSearch, WebFetch, Write · writes notes to its docs folder', Reviewer:'Tools: Read, Grep, Glob, Bash, Write · writes review notes only, no code edits', Builder:'Tools: Read, Grep, Glob, Bash, Write, Edit · can change project files inside its scope' };`);
+rep(`const TYPE_HELP = { Researcher:'Tools: Read, Grep, Glob, WebSearch · no file writes', Reviewer:'Tools: Read, Grep, Glob · comments only, no edits', Builder:'Tools: Read, Edit, Write, Bash · writes inside its scope', Operator:'Tools: whatever your Claude session has, including connected apps · for work that is not code' };`,
+    `const TYPE_HELP = { Researcher:'Tools: Read, Grep, Glob, Bash, WebSearch, WebFetch, Write · writes notes to its docs folder', Reviewer:'Tools: Read, Grep, Glob, Bash, Write · writes review notes only, no code edits', Builder:'Tools: Read, Grep, Glob, Bash, Write, Edit · can change project files inside its scope' , Operator:'Tools: whatever your Claude session has, including connected apps (shop, email, spreadsheets) · for work that is not code' };`);
 
 // 4. show the server's own error text (the agent form already does)
 rep(`catch(err){ setFieldError('fwPRoot', 'ePRoot', 'Couldn\\'t add it: ' + err.message); }`,

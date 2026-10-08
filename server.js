@@ -85,12 +85,13 @@ function walk(dir, base = '') {
   for (const e of entries) {
     const rel = base ? `${base}/${e.name}` : e.name;
     if (e.isDirectory()) files = files.concat(walk(path.join(dir, e.name), rel));
-    else if (/\.(md|txt)$/i.test(e.name)) files.push(rel);
+    else if (/\.(md|txt|csv|json|html|log)$/i.test(e.name)) files.push(rel);
   }
   return files;
 }
 const EMBLEMS = ['scout', 'compass', 'forge', 'echo', 'sentry', 'warden', 'herald', 'scribe', 'custodian', 'orb'];
-const agentType = tools => /\bEdit\b/.test(tools || '') ? 'Builder' : /WebSearch|WebFetch/.test(tools || '') ? 'Researcher' : 'Reviewer';
+// No tools line means the agent inherits everything the session has (connectors included), which is what a non-code operator is.
+const agentType = tools => !tools || /mcp__/.test(tools) ? 'Operator' : /\bEdit\b/.test(tools) ? 'Builder' : /WebSearch|WebFetch/.test(tools || '') ? 'Researcher' : 'Reviewer';
 function readAgents(p) {
   let names = [];
   try { names = fs.readdirSync(agentsDir(p)).filter(f => f.endsWith('.md')); } catch {}
@@ -169,7 +170,9 @@ const PRESETS = {
   Researcher: 'Read, Grep, Glob, Bash, Write, WebSearch, WebFetch',
   Reviewer: 'Read, Grep, Glob, Bash, Write',
   Builder: 'Read, Grep, Glob, Bash, Write, Edit',
+  Operator: '', // no tools line: uses whatever the session has, including connected apps
 };
+const isGit = p => fs.existsSync(path.join(p.repo || p.root, '.git'));
 const RESERVED = ['claude', 'explore', 'plan', 'general-purpose', 'statusline-setup', 'claude-code-guide'];
 const clean = (s, max) => String(s == null ? '' : s).replace(/[\r\n\t]+/g, ' ').trim().slice(0, max);
 const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30);
@@ -294,13 +297,15 @@ const fill = (tpl, vars) => tpl.replace(/\{\{(\w+)\}\}/g, (m, k) => (k in vars ?
 function agentFields(b, name) {
   const goal = String(b.goal || b.description || '').trim().slice(0, 1000);
   if (goal.length < 3) return { error: 'Describe its goal in a sentence.' };
-  const tools = PRESETS[b.type];
-  if (!tools) return { error: 'Pick what the agent may do.' };
+  if (!Object.prototype.hasOwnProperty.call(PRESETS, b.type)) return { error: 'Pick what the agent may do.' };
+  const toolsCustom = clean(b.tools, 400);
+  if (toolsCustom && !/^[A-Za-z0-9_*:(),. -]+$/.test(toolsCustom)) return { error: 'Tools can only contain letters, numbers, commas and names like mcp__shop.' };
+  const tools = toolsCustom || PRESETS[b.type];
   const custom = b.custom === true;
   const prompt = custom ? String(b.prompt || '').trim().slice(0, 20000) : '';
   if (custom && prompt.length < 10) return { error: 'Write the prompt, or switch off "Write the whole prompt myself".' };
   return {
-    goal, tools, type: b.type, custom, prompt,
+    goal, tools, toolsCustom, type: b.type, custom, prompt,
     how: String(b.how || '').trim().slice(0, 6000),
     extra: String(b.extra || '').trim().slice(0, 4000),
     role: clean(b.role, 80) || clean(goal, 60).replace(/[.\s]+$/, ''),
@@ -317,6 +322,9 @@ function agentFiles(p, name, f) {
   const statusPath = win.join(root, 'agent-status', `${name}.md`);
   const defPath = path.join(agentsDir(p), `${name}.md`);
   const requestPath = win.join(root, 'agent-emblems', `${name}.request.md`);
+  const git = isGit(p);
+  const gitRule = git ? `Prefix commit messages with "${NAME}:" and commit only your own files by explicit path. Never push; the user decides when to push.` : 'This folder is not a git repository: keep your work in files, never overwrite another agent\'s files, and never delete anything unless asked.';
+  const gitLine = git ? 'When committing, stage and commit only your own files by explicit path, never `git add -A`. Never push.' : 'This folder is not a git repository, so keep your work in files and never overwrite another agent\'s files.';
   let prompt;
   if (f.custom) prompt = f.prompt + '\n';
   else {
@@ -326,14 +334,13 @@ function agentFiles(p, name, f) {
       NAME, role: f.role, project: p.name, root, goal: f.goal,
       how: f.how || 'Use your judgment. Keep changes small and tell the user what you did.',
       extra: f.extra ? `\n## Extra rules\n${f.extra}\n` : '',
-      scope: f.scope, missions: win.join(root, 'agent-missions'), name,
+      gitRule, scope: f.scope, missions: win.join(root, 'agent-missions'), name,
     });
   }
   const def = `---
 name: ${name}
 description: ${JSON.stringify(f.when.startsWith(f.role) ? f.when : `${f.role}. ${f.when}`)}
-tools: ${f.tools}
----
+${f.tools ? `tools: ${f.tools}\n` : ''}---
 
 You are ${NAME} (${f.role}) for the ${p.name} project, launched as a subagent by the orchestrator session.
 
@@ -351,14 +358,14 @@ You are ${NAME} (${f.role}) for the ${p.name} project, launched as a subagent by
    - Rewrite it at each milestone.
    - If you stop for any reason, set \`state: blocked\` or \`state: failed\` with the reason in \`step\`.
    - Your last tool call before the final report must set \`state: done\` with \`output\` set. Do not report finished until this write is done.
-4. Other agents may run in parallel in the same checkout. Your write scope is ${f.scope}. When committing, stage and commit only your own files by explicit path, never \`git add -A\`. Never push.
+4. Other agents may run in parallel in the same checkout. Your write scope is ${f.scope}. ${gitLine}
 5. **Your emblem:** if \`${requestPath}\` exists, you have not drawn your own icon yet. Before your main task, read that file and follow it. It is a short one-time drawing job, and it is the only time you may write outside your scope.
 6. Finish with a short report: what you did and how, what is unverified, and any mission file you wrote for another agent.
 `;
   return { prompt, def, promptPath, statusPath, defPath };
 }
 
-const metaOf = f => ({ emblem: f.emblem, type: f.type, goal: f.goal, how: f.how, extra: f.extra, role: f.role, when: f.when, scope: f.scope, custom: f.custom, prompt: f.prompt });
+const metaOf = f => ({ emblem: f.emblem, type: f.type, tools: f.toolsCustom, goal: f.goal, how: f.how, extra: f.extra, role: f.role, when: f.when, scope: f.scope, custom: f.custom, prompt: f.prompt });
 const validName = n => /^[a-z][a-z0-9-]{1,29}$/.test(n);
 
 function createAgent(b) {
@@ -544,7 +551,7 @@ http.createServer((req, res) => {
     if (!p) return json(res, { error: 'No projects yet.' }, 404);
     const agents = readAgents(p);
     const names = agents.map(a => a.name);
-    return gitLog(p, names, commits => json(res, { project: { id: p.id, name: p.name, root: p.root }, agents, docs: readOutputs(p, names), commits }));
+    return gitLog(p, names, commits => json(res, { project: { id: p.id, name: p.name, root: p.root }, git: isGit(p), agents, docs: readOutputs(p, names), commits }));
   }
   if (url.pathname === '/api/file') {
     const full = resolveFile(url.searchParams.get('id') || '');
@@ -552,7 +559,8 @@ http.createServer((req, res) => {
     try {
       const id = url.searchParams.get('id'), p = getProject(id.slice(0, id.indexOf(':')));
       const meta = readOutputs(p, readAgents(p).map(a => a.name)).find(o => o.id === id) || {};
-      return json(res, { id, name: meta.name || path.basename(full), kind: meta.kind || 'Docs', agent: meta.agent || null, mtime: fs.statSync(full).mtimeMs, text: fs.readFileSync(full, 'utf8') });
+      const raw = fs.readFileSync(full, 'utf8'), cap = 400000;
+      return json(res, { id, name: meta.name || path.basename(full), kind: meta.kind || 'Docs', agent: meta.agent || null, mtime: fs.statSync(full).mtimeMs, text: raw.slice(0, cap), truncated: raw.length > cap });
     }
     catch { return json(res, { error: 'not found' }, 404); }
   }

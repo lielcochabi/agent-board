@@ -294,6 +294,7 @@ button{cursor:pointer}
 .doclist .new .dn::after{content:" new";color:var(--signal);font-size:11px}
 .muted{color:var(--ink-3);font-size:13px}
 .doc{font-size:14.5px;line-height:1.7;color:var(--ink)}
+.doc-pre{white-space:pre-wrap;word-break:break-word;font:400 12.5px/1.6 var(--mono);color:var(--ink-2);margin:0}
 .doc h1{font:600 19px/1.3 var(--sans);margin:0 0 14px}
 .doc h2{font:600 15px/1.3 var(--sans);margin:22px 0 8px}
 .doc p{margin:0 0 12px;color:var(--ink-2)}
@@ -449,6 +450,7 @@ dialog.sheet[open]{animation:sheetIn .24s var(--ease)}
           <label><input type="radio" name="type" value="Researcher" checked><span>Researcher</span></label>
           <label><input type="radio" name="type" value="Reviewer"><span>Reviewer</span></label>
           <label><input type="radio" name="type" value="Builder"><span>Builder</span></label>
+          <label><input type="radio" name="type" value="Operator"><span>Operator</span></label>
         </div>
         <span class="help mono" id="typeHelp"></span>
       </div>
@@ -459,6 +461,7 @@ dialog.sheet[open]{animation:sheetIn .24s var(--ease)}
       <details class="adv" id="advanced">
         <summary>Advanced</summary>
         <div class="adv-body">
+          <div class="field"><label for="fTools">Tools <span class="opt">· optional, replaces the type's list</span></label><input id="fTools" class="mono" placeholder="e.g. Read, Write, WebSearch, mcp__shopify"><span class="help">Comma separated. Connected apps appear as names starting with <code class="mono">mcp__</code>.</span></div>
           <div class="field"><label for="fRole">Role <span class="opt">· short label, defaults to the goal</span></label><input id="fRole" placeholder="e.g. Docs keeper"></div>
           <div class="field"><label for="fWhen">When should it be used <span class="opt">· helps Claude Code pick it</span></label><input id="fWhen" placeholder="Defaults to the goal"></div>
           <div class="field"><label for="fScope">Write scope <span class="opt">· optional</span></label><input id="fScope" class="mono" placeholder="docs/<name>/ and agent-missions/"></div>
@@ -1099,7 +1102,7 @@ async function renderPanel(){
       try{
         const d = await api.file(v.doc);
         if (S.panel?.doc !== v.doc) return;
-        body.innerHTML = `<div class="doc-meta"><span>${esc(d.kind)}/${esc(d.name)}</span><span>${esc(d.agent)}</span><span title="${abs(d.mtime)}">${ago(d.mtime)}</span></div><article class="doc">${md(d.text || '')}</article>`;
+        body.innerHTML = `<div class="doc-meta"><span>${esc(d.kind)}/${esc(d.name)}</span><span>${esc(d.agent)}</span><span title="${abs(d.mtime)}">${ago(d.mtime)}</span></div><article class="doc">${/\.md$/i.test(d.name) ? md(d.text || '') : `<pre class="doc-pre">${esc(d.text || '')}</pre>`}${d.truncated ? '<p class="muted">Showing the first part of a large file.</p>' : ''}</article>`;
         body.scrollTop = 0;
       } catch(e){ body.innerHTML = `<p class="muted">Couldn't open this file. It may have been moved or deleted.</p>`; }
     }
@@ -1221,7 +1224,7 @@ async function startRun(){
 /* ================================================================
    SHEETS
    ================================================================ */
-const TYPE_HELP = { Researcher:'Tools: Read, Grep, Glob, WebSearch · no file writes', Reviewer:'Tools: Read, Grep, Glob · comments only, no edits', Builder:'Tools: Read, Edit, Write, Bash · writes inside its scope' };
+const TYPE_HELP = { Researcher:'Tools: Read, Grep, Glob, WebSearch · no file writes', Reviewer:'Tools: Read, Grep, Glob · comments only, no edits', Builder:'Tools: Read, Edit, Write, Bash · writes inside its scope', Operator:'Tools: whatever your Claude session has, including connected apps · for work that is not code' };
 function setFieldError(wrapId, errId, msg){ const w = $('#' + wrapId); w.classList.toggle('bad', !!msg); if (msg && errId) $('#' + errId).textContent = msg; w.querySelector('input,textarea')?.setAttribute('aria-invalid', String(!!msg)); return !msg; }
 let editing = null; // agent name while the sheet is in edit mode
 const SHEET_FIELDS = ['fwName', 'fwGoal', 'fwPrompt'];
@@ -1239,9 +1242,9 @@ async function openAgentSheet(editName){
       const a = await api.getAgent(S.focus, editing);
       $('#fName').value = editing; $('#fGoal').value = a.goal || ''; $('#fHow').value = a.how || '';
       $('#fRole').value = a.role || ''; $('#fWhen').value = a.when || ''; $('#fScope').value = a.scope || '';
-      $('#fExtra').value = a.extra || ''; $('#fCustom').checked = !!a.custom; $('#fPrompt').value = a.prompt || '';
+      $('#fTools').value = a.tools || ''; $('#fExtra').value = a.extra || ''; $('#fCustom').checked = !!a.custom; $('#fPrompt').value = a.prompt || '';
       const r = document.querySelector(`input[name=type][value="${a.type}"]`); if (r) r.checked = true;
-      $('#advanced').open = !!(a.custom || a.extra || a.role || a.when);
+      $('#advanced').open = !!(a.custom || a.extra || a.role || a.when || a.tools);
       syncCustom();
     } catch(err){ return toast(esc(err.message)); }
   }
@@ -1265,7 +1268,7 @@ $('#agentForm').addEventListener('submit', async e => {
   const okP = !custom || setFieldError('fwPrompt', 'ePrompt', prompt.length >= 10 ? '' : 'Write the prompt, or switch this off.');
   if (!(okN && okG && okP)){ if (!okP) $('#advanced').open = true; return $('#agentSheet .field.bad input, #agentSheet .field.bad textarea').focus(); }
   const body = {
-    name, goal, how: $('#fHow').value.trim(), type: new FormData(e.target).get('type'), iconBrief: $('#fIcon').value.trim(),
+    name, goal, how: $('#fHow').value.trim(), type: new FormData(e.target).get('type'), iconBrief: $('#fIcon').value.trim(), tools: $('#fTools').value.trim(),
     role: $('#fRole').value.trim(), when: $('#fWhen').value.trim(), scope: $('#fScope').value.trim(), extra: $('#fExtra').value.trim(), custom, prompt
   };
   try{
@@ -1310,7 +1313,7 @@ $('#launcherToggle').onchange = e => { S.launcherDown = e.target.checked; };
 $('#motionToggle').onchange = e => document.documentElement.classList.toggle('rm-preview', e.target.checked);
 
 /* ================================================================ */
-function render(){ renderStrip(); renderBay(); renderPanel(); }
+function render(){ $('#commitsBtn').hidden = data()?.git === false; renderStrip(); renderBay(); renderPanel(); }
 setInterval(() => { renderBay(); if (S.panel?.mode === 'agent') renderPanel(); }, 30000);
 refetch();
 </script>
