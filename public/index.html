@@ -336,6 +336,22 @@ button{cursor:pointer}
 .field .conn input{width:16px;height:16px;padding:0;flex:none}
 .conn small{white-space:nowrap}
 .conn small{color:var(--ink-3);font-size:11px}
+.imp-group{display:grid;gap:8px}
+.imp-group h3{margin:6px 0 0;font:600 13px/1.3 var(--sans)}
+.imp-group>p{margin:0 0 4px}
+.imp-list{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.imp{display:flex;gap:12px;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:var(--r-md);background:var(--bay)}
+.imp>div{display:grid;gap:2px;min-width:0;font-size:13px}
+.imp .muted{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.thread{list-style:none;margin:0 0 10px;padding:0;display:grid;gap:8px}
+.msg{padding:8px 10px;border-radius:var(--r-md);border:1px solid var(--line);background:var(--bay);max-width:92%}
+.msg.in{justify-self:end;border-color:var(--line-2)}
+.msg .who{font:400 11px/1 var(--mono);color:var(--ink-3)}
+.msg p{margin:4px 0 0;font-size:13px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
+.msgbox textarea{width:100%;min-height:56px;padding:8px 10px;border:1px solid var(--line-2);border-radius:var(--r-sm);background:var(--bay);color:var(--ink);resize:vertical}
+.msgbox .row{display:flex;gap:10px;justify-content:space-between;align-items:center;margin-top:8px}
+.msgbox .hint{font-size:12px;color:var(--ink-3)}
+.msgbox .hint.err{color:var(--red)}
 .doc-pre{white-space:pre-wrap;word-break:break-word;font:400 12.5px/1.6 var(--mono);color:var(--ink-2);margin:0}
 .doc h1{font:600 19px/1.3 var(--sans);margin:0 0 14px}
 .doc h2{font:600 15px/1.3 var(--sans);margin:22px 0 8px}
@@ -455,6 +471,7 @@ dialog.sheet[open]{animation:sheetIn .24s var(--ease)}
         <button class="btn ghost" id="commitsBtn">
           <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="2.5"/><path d="M1 8h4.5M10.5 8H15"/></svg>
           Commits</button>
+        <button class="btn" id="importBtn">Import</button>
         <button class="btn" id="newAgentBtn">+ New agent</button>
       </div>
     </div>
@@ -488,6 +505,7 @@ dialog.sheet[open]{animation:sheetIn .24s var(--ease)}
         <div class="field"><label for="fProject">Project</label><select id="fProject"></select></div>
         <div class="field" id="fwName"><label for="fName">Name</label><input id="fName" placeholder="e.g. pathfinder" autocomplete="off" aria-describedby="eName"><span class="ferr" id="eName"></span></div>
       </div>
+      <label class="chk" id="impSchedRow" hidden><input type="checkbox" id="fImpSched" checked><span id="impSchedText"></span></label>
       <div class="field" id="fwGoal"><label for="fGoal">Goal</label><textarea id="fGoal" rows="2" placeholder="One sentence: what is this agent for? e.g. Keep the README and docs accurate." aria-describedby="eGoal"></textarea><span class="ferr" id="eGoal">Give it a goal, one sentence is enough.</span></div>
       <div class="field"><label for="fHow">How it works <span class="opt">· optional</span></label><textarea id="fHow" rows="3" placeholder="Its approach. e.g. Compare each change with the code, write findings to docs, never touch source files."></textarea><span class="help">Everything else (rules, status updates, commits, reporting) comes from the shared template.</span></div>
       <div class="field"><span class="lbl" id="typeLbl">What may it do</span>
@@ -518,6 +536,13 @@ dialog.sheet[open]{animation:sheetIn .24s var(--ease)}
     </div>
     <div class="sh-foot"><button type="button" class="btn ghost" data-close>Cancel</button><button type="submit" class="btn primary" id="agentSubmit">Create agent</button></div>
   </form>
+</dialog>
+
+<!-- Import chats and scheduled tasks -->
+<dialog class="sheet" id="importSheet" aria-labelledby="importTitle">
+  <div class="sh-head"><h2 id="importTitle">Import chats and scheduled tasks</h2><button type="button" class="icon-btn" data-close aria-label="Close"><svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg></button></div>
+  <div class="sh-body" id="importBody"></div>
+  <div class="sh-foot"><button type="button" class="btn ghost" data-close>Close</button></div>
 </dialog>
 
 <!-- Add project -->
@@ -575,6 +600,10 @@ const api = {
   async redrawIcon(project, name, brief){ await post('/api/agents/icon', { project, name, brief }); },
   flow: id => j('/api/flow?project=' + encodeURIComponent(id)),
   connectors: id => j('/api/connectors?project=' + encodeURIComponent(id)),
+  thread: (project, agent) => j('/api/thread?project=' + encodeURIComponent(project) + '&agent=' + encodeURIComponent(agent)),
+  async sendMessage(project, agent, text){ return post('/api/messages', { project, agent, text }); },
+  imports: () => j('/api/imports'),
+  async adopt(project, body){ return post('/api/imports/adopt', { project, ...body }); },
   async addTrigger(project, agent, t){ await post('/api/triggers', { project, agent, ...t }); },
   async removeTrigger(project, id){ await post('/api/triggers/remove', { project, id }); },
   async toggleTrigger(project, id, enabled){ await post('/api/triggers/toggle', { project, id, enabled }); },
@@ -935,8 +964,8 @@ async function renderPanel(){
   if (S.headKey !== hk){
     S.headKey = hk;
     head.innerHTML = `${embWrap(a.emblem, a.state)}<div class="p-title"><h2>${esc(a.name)}</h2><div class="sub">${esc(a.role)}</div></div>${CLOSE_BTN}`;
-    body.innerHTML = `<section class="p-sec" id="pFacts"></section><section class="p-sec" id="pRun" aria-label="Run"></section><section class="p-sec" id="pDocs"></section><section class="p-sec" id="pTrig" aria-label="Triggers"></section><section class="p-sec" id="pManage" aria-label="Manage"></section>`;
-    S.runKey = ''; S.trigSig = '';
+    body.innerHTML = `<section class="p-sec" id="pFacts"></section><section class="p-sec" id="pRun" aria-label="Run"></section><section class="p-sec" id="pDocs"></section><section class="p-sec" id="pMsg" aria-label="Messages"></section><section class="p-sec" id="pTrig" aria-label="Triggers"></section><section class="p-sec" id="pManage" aria-label="Manage"></section>`;
+    S.runKey = ''; S.trigSig = ''; S.msgSig = '';
   }
   head.querySelector('.emb-wrap').dataset.state = a.state;
   // facts
@@ -946,6 +975,7 @@ async function renderPanel(){
     <dt>Step</dt><dd class="step">${a.step ? esc(a.step) : '<span class="muted">—</span>'}</dd>
     <dt>Updated</dt><dd class="mono" style="font-size:13px" title="${a.updated ? abs(a.updated) : ''}">${a.updated ? ago(a.updated) : '—'}</dd>
     <dt>Type</dt><dd>${esc(a.type || '—')}</dd>
+    ${a.origin ? `<dt>From</dt><dd>${a.origin.kind === 'scheduled' ? 'Scheduled task' : 'Chat'}: ${esc(a.origin.title)}${a.origin.link ? ` · <a href="${esc(a.origin.link)}">open original</a>` : ''}</dd>` : ''}
     ${a.missions ? `<dt>Missions</dt><dd>${a.missions} waiting</dd>` : ''}${a.requests ? `<dt>Queued</dt><dd>${a.requests} request${a.requests > 1 ? 's' : ''} waiting for Claude Code</dd>` : ''}</dl>`;
   // run control
   const mode = a.state === 'running' ? 'live' : S.fallback[key] ? 'fallback' : 'form';
@@ -983,6 +1013,19 @@ async function renderPanel(){
   $('#pDocs').innerHTML = `<p class="p-label">Outputs · ${docs.length}</p>` + (docs.length
     ? `<ul class="doclist">${docs.map(d => `<li class="${S.justDone?.[key] === d.id ? 'new' : ''}"><button data-doc="${esc(d.id)}"><span class="kind">${esc(d.kind)}</span><span class="dn">${esc(d.name)}</span><span class="dt" title="${abs(d.mtime)}">${ago(d.mtime)}</span></button></li>`).join('')}</ul>`
     : `<p class="muted">Nothing written yet. Outputs appear here as ${esc(a.name)} saves them.</p>`);
+  // messages: the agent's own folder, shown as a short thread
+  const mkey = a.space ? a.space.count + ':' + a.space.last : '';
+  if (S.threadSig[key] !== mkey){
+    S.threadSig[key] = mkey;
+    api.thread(S.focus, a.name).then(t => { S.thread[key] = t.items || []; S.msgSig = ''; if (S.panel?.agent === a.name) renderPanel(); }).catch(() => {});
+  }
+  const msig = JSON.stringify([key, S.thread[key], a.space?.unanswered, S.msgErr]);
+  if (S.msgSig !== msig){
+    S.msgSig = msig;
+    const keepMsg = $('#msgIn')?.value;
+    $('#pMsg').innerHTML = msgHTML(a, key);
+    if (keepMsg && $('#msgIn')) $('#msgIn').value = keepMsg;
+  }
   const tsig = JSON.stringify([a.name, a.triggers, S.trigEdit === key, S.trigErr, S.trigDraft, (data().agents || []).length]);
   if (S.trigSig !== tsig){ S.trigSig = tsig; $('#pTrig').innerHTML = trigHTML(a, key); if (S.trigEdit === key) syncTrig(); }
   // manage: edit / remove (remove asks first and only moves files aside)
@@ -1070,10 +1113,11 @@ $('#connList').addEventListener('change', e => {
 });
 $('#fTools').addEventListener('input', syncConn);
 $('#fProject').addEventListener('change', () => loadConnectors($('#fProject').value));
-async function openAgentSheet(editName){
-  const f = $('#agentForm'); f.reset(); editing = editName || null;
+const nameFrom = t => String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^[^a-z]+|-+$/g, '').slice(0, 30).replace(/-+$/, '') || 'agent';
+async function openAgentSheet(editName, imp){
+  const f = $('#agentForm'); f.reset(); editing = editName || null; S.importItem = imp || null;
   SHEET_FIELDS.forEach(id => setFieldError(id));
-  $('#agentSheetTitle').textContent = editing ? 'Edit ' + editing : 'New agent';
+  $('#agentSheetTitle').textContent = editing ? 'Edit ' + editing : imp ? (imp.kind === 'scheduled' ? 'New agent from a scheduled task' : 'New agent from a chat') : 'New agent';
   $('#agentSubmit').textContent = editing ? 'Save changes' : 'Create agent';
   $('#fProject').innerHTML = S.projects.map(p => `<option value="${esc(p.id)}" ${p.id === S.focus ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
   $('#fProject').disabled = $('#fName').disabled = !!editing;
@@ -1088,6 +1132,16 @@ async function openAgentSheet(editName){
       $('#advanced').open = !!(a.custom || a.extra || a.role || a.when || a.tools);
       syncCustom();
     } catch(err){ return toast(esc(err.message)); }
+  }
+  $('#impSchedRow').hidden = !(imp && imp.trigger);
+  if (imp){
+    if (imp.project && S.projects.some(p => p.id === imp.project)) $('#fProject').value = imp.project;
+    $('#fName').value = nameFrom(imp.title);
+    $('#fGoal').value = imp.description || imp.title;
+    $('#fHow').value = imp.prompt ? imp.prompt.slice(0, 1500) : '';
+    const r = document.querySelector('input[name=type][value="Operator"]'); if (r) r.checked = true;
+    $('#typeHelp').textContent = TYPE_HELP.Operator;
+    if (imp.trigger) $('#impSchedText').textContent = 'Also run it on its schedule: ' + imp.trigger.label;
   }
   $('#fIcon').value = '';
   $('#iconLbl').innerHTML = editing ? 'New icon <span class="opt">· optional, leave empty to keep the current one</span>' : 'Icon <span class="opt">· optional</span>';
@@ -1114,14 +1168,41 @@ $('#agentForm').addEventListener('submit', async e => {
     role: $('#fRole').value.trim(), when: $('#fWhen').value.trim(), scope: $('#fScope').value.trim(), extra: $('#fExtra').value.trim(), custom, prompt
   };
   try{
-    await (editing ? api.updateAgent(pid, body) : api.createAgent(pid, body));
+    const res = await (editing ? api.updateAgent(pid, body) : S.importItem ? api.adopt(pid, { ...body, id: S.importItem.id, schedule: !$('#impSchedRow').hidden && $('#fImpSched').checked }) : api.createAgent(pid, body));
+    if (S.importItem && res && res.trigger) body.addedTrigger = res.trigger;
     if (editing && body.iconBrief) await api.redrawIcon(pid, name, body.iconBrief);
   }
   catch(err){ return setFieldError(editing ? 'fwGoal' : 'fwName', editing ? 'eGoal' : 'eName', err.message); }
   $('#agentSheet').close();
   if (pid !== S.focus) focusProject(pid);
   if (editing){ S.headKey = ''; toast(`Saved <code>${esc(name)}</code>. The new instructions apply the next time it runs.`); }
+  else if (S.importItem){ S.importItem = null; toast(`<code>${esc(name)}</code> is on the board${body.addedTrigger ? ' with the trigger: ' + esc(body.addedTrigger) : ''}. Write to it from its panel.`); }
   else toast(`Created <code>${esc(name)}</code>. In Claude Code say <code>Use the ${esc(name)} agent to …</code>. It draws its own icon the first time it runs.`);
+});
+const ageText = t => t ? ago(t) : '';
+function importHTML(res){
+  const items = res.items || [];
+  if (!items.length) return `<p>Nothing to import yet.</p><p class="muted">In a Claude Code session run <code>/board:import</code>. It lists your scheduled tasks and the chats in the Claude app and sends them here. Plain chats on claude.ai are not visible to Claude Code, so for those use New agent and write down what the chat was for.</p>`;
+  const groups = [
+    ['scheduled', 'Scheduled tasks', 'Tasks that run on a timer in the Claude app. A daily or repeating schedule can come along as a trigger.'],
+    ['session', 'Chats', 'Your chats in the Claude app. The conversation itself does not move over, so say what the chat was for. The new agent gets its own folder with an inbox and an outbox.']
+  ];
+  return groups.map(([kind, title, note]) => {
+    const list = items.filter(i => i.kind === kind);
+    if (!list.length) return '';
+    return `<section class="imp-group"><h3>${title} · ${list.length}</h3><p class="muted">${note}</p><ul class="imp-list">${list.map(i => `<li class="imp"><div><b>${esc(i.title)}</b><span class="muted">${kind === 'scheduled' ? esc(i.schedule || i.cron || 'No schedule') + (i.trigger ? ' · becomes a trigger' : i.cron ? ' · schedule not converted' : '') : esc(i.cwd || '') + (i.lastActivity ? ' · ' + ageText(i.lastActivity) : '')}</span></div><button class="btn" data-imp="${esc(i.id)}">Make agent</button></li>`).join('')}</ul></section>`;
+  }).join('') + `<p class="muted">List updated ${ageText(res.at)}. Run <code>/board:import</code> again to refresh it.</p>`;
+}
+async function openImport(){
+  $('#importBody').innerHTML = '<p class="muted">Loading…</p>'; $('#importSheet').showModal();
+  try{ S.imports = await api.imports(); $('#importBody').innerHTML = importHTML(S.imports); }
+  catch(err){ $('#importBody').innerHTML = `<p class="muted">${esc(err.message)}</p>`; }
+}
+$('#importBtn').onclick = openImport;
+$('#importBody').addEventListener('click', e => {
+  const b = e.target.closest('[data-imp]'); if (!b) return;
+  const it = (S.imports?.items || []).find(x => x.id === b.dataset.imp); if (!it) return;
+  $('#importSheet').close(); openAgentSheet(null, it);
 });
 function openProjectSheet(){
   $('#projectForm').reset(); ['fwPName','fwPRoot'].forEach(id => setFieldError(id));
@@ -1215,6 +1296,31 @@ async function renderFlow(){
 }
 $('#flowBtn').onclick = () => { S.view = S.view === 'flow' ? 'stage' : 'flow'; S.flowSig = ''; renderFlow(); };
 $('#flow').addEventListener('click', e => { const b = e.target.closest('[data-flow-agent]'); if (b) openPanel({ mode:'agent', agent:b.dataset.flowAgent }, b); });
+
+/* ================================================================
+   MESSAGES (the agent's own folder: inbox and outbox)
+   ================================================================ */
+S.thread = {}; S.threadSig = {}; S.msgSig = ''; S.msgErr = '';
+function msgHTML(a, key){
+  const items = (S.thread[key] || []).slice(-8), un = a.space?.unanswered || 0;
+  let h = `<p class="p-label">Messages${un ? ` · ${un} waiting for a reply` : ''}</p>`;
+  h += items.length
+    ? `<ul class="thread">${items.map(m => `<li class="msg ${m.side}"><span class="who">${m.side === 'in' ? 'You' : esc(a.name)} · ${ago(m.at)}</span><p>${esc(m.text)}</p></li>`).join('')}</ul>`
+    : `<p class="muted">No messages yet. ${esc(a.name)} has its own folder, <code>agent-space/${esc(a.name)}</code>, to talk through.</p>`;
+  return h + `<div class="msgbox"><label class="sr" for="msgIn">Message to ${esc(a.name)}</label><textarea id="msgIn" rows="2" placeholder="Write to ${esc(a.name)}…"></textarea><div class="row"><span class="hint ${S.msgErr ? 'err' : ''}">${S.msgErr ? esc(S.msgErr) : 'Saved to its inbox and queued as a run. Claude Code answers when it starts the agent.'}</span><button class="btn primary" data-msg-send>Send</button></div></div>`;
+}
+async function sendMsg(){
+  const name = S.panel?.agent, key = S.focus + '/' + name, box = $('#msgIn'), text = box?.value.trim();
+  if (!text){ S.msgErr = 'Write a message first.'; S.msgSig = ''; return renderPanel(); }
+  try{
+    const r = await api.sendMessage(S.focus, name, text);
+    S.msgErr = ''; box.value = ''; S.threadSig[key] = ''; S.msgSig = '';
+    if (r && r.queued === false) toast(`Saved to ${esc(name)}'s inbox. A run for it is already queued.`);
+  }catch(err){ S.msgErr = err.message; S.msgSig = ''; }
+  renderPanel(); refetch();
+}
+$('#panel').addEventListener('click', e => { if (e.target.closest('[data-msg-send]')) sendMsg(); });
+$('#panel').addEventListener('keydown', e => { if (e.target.id === 'msgIn' && e.key === 'Enter' && (e.metaKey || e.ctrlKey)){ e.preventDefault(); sendMsg(); } });
 
 /* ================================================================
    TRIGGERS (in the agent panel)

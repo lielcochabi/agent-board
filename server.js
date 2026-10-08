@@ -118,6 +118,7 @@ function readAgents(p) {
              editable: !!meta.goal,
              missions: missionFiles.filter(m => m.toLowerCase().startsWith(name + '-')).length,
              requests: requestFiles.filter(m => m.toLowerCase().startsWith(name + '-')).length,
+             space: spaceSummary(p, name), origin: meta.origin || null,
              triggers: (p.triggers || []).filter(t => t.agent === name).map(t => ({ id: t.id, kind: t.kind, label: triggerLabel(t), task: t.task, enabled: t.enabled, last: t.last || 0, lastError: t.lastError || '' })) };
   });
   const rank = n => { const i = p.order.indexOf(n); return i < 0 ? 999 : i; };
@@ -346,6 +347,7 @@ function agentFiles(p, name, f) {
   const statusPath = win.join(root, 'agent-status', `${name}.md`);
   const defPath = path.join(agentsDir(p), `${name}.md`);
   const requestPath = win.join(root, 'agent-emblems', `${name}.request.md`);
+  const spaceRoot = win.join(root, 'agent-space', name);
   const git = isGit(p);
   const gitRule = git ? `Prefix commit messages with "${NAME}:" and commit only your own files by explicit path. Never push; the user decides when to push.` : 'This folder is not a git repository: keep your work in files, never overwrite another agent\'s files, and never delete anything unless asked.';
   const gitLine = git ? 'When committing, stage and commit only your own files by explicit path, never `git add -A`. Never push.' : 'This folder is not a git repository, so keep your work in files and never overwrite another agent\'s files.';
@@ -358,7 +360,7 @@ function agentFiles(p, name, f) {
       NAME, role: f.role, project: p.name, root, goal: f.goal,
       how: f.how || 'Use your judgment. Keep changes small and tell the user what you did.',
       extra: f.extra ? `\n## Extra rules\n${f.extra}\n` : '',
-      gitRule, scope: f.scope, missions: win.join(root, 'agent-missions'), name,
+      gitRule, space: spaceRoot, scope: f.scope, missions: win.join(root, 'agent-missions'), name,
     });
   }
   const def = `---
@@ -384,7 +386,8 @@ You are ${NAME} (${f.role}) for the ${p.name} project, launched as a subagent by
    - Your last tool call before the final report must set \`state: done\` with \`output\` set. Do not report finished until this write is done.
 4. Other agents may run in parallel in the same checkout. Your write scope is ${f.scope}. ${gitLine}
 5. **Your emblem:** if \`${requestPath}\` exists, you have not drawn your own icon yet. Before your main task, read that file and follow it. It is a short one-time drawing job, and it is the only time you may write outside your scope.
-6. Finish with a short report: what you did and how, what is unverified, and any mission file you wrote for another agent.
+6. **Your folder:** you have a workspace at \`${spaceRoot}\`. The user's messages arrive in its \`inbox/\` folder; answer by writing a new file in \`outbox/\` whose first line is \`to: you\`. Keep notes you want to remember in the same folder.
+7. Finish with a short report: what you did and how, what is unverified, and any mission file you wrote for another agent.
 `;
   return { prompt, def, promptPath, statusPath, defPath };
 }
@@ -407,6 +410,7 @@ function createAgent(b) {
     fs.mkdirSync(agentsDir(p), { recursive: true });
     fs.mkdirSync(promptsDir(p), { recursive: true });
     fs.mkdirSync(statusDir(p), { recursive: true });
+    ensureSpace(p, name);
     fs.writeFileSync(files.promptPath, files.prompt, { flag: 'wx' });
     fs.writeFileSync(files.defPath, files.def, { flag: 'wx' });
     fs.writeFileSync(files.statusPath, 'state: idle\ntask: -\nstep: -\nupdated: -\noutput: -\n', { flag: 'wx' });
@@ -444,7 +448,7 @@ function updateAgent(b) {
   try {
     fs.writeFileSync(files.promptPath, files.prompt);
     fs.writeFileSync(files.defPath, files.def);
-    r.p.meta[r.name] = metaOf(f); saveProjects();
+    r.p.meta[r.name] = { ...metaOf(f), origin: r.m.origin }; saveProjects();
   } catch (e) { return { error: `Could not write the agent files: ${e.code || e.message}` }; }
   return { ok: true, name: r.name };
 }
@@ -462,7 +466,7 @@ function removeAgent(b) {
   const dest = path.join(p.root, 'agent-removed', `${name}-${new Date().toISOString().replace(/[-:]/g, '').replace(/\..*/, '')}`);
   try {
     fs.mkdirSync(dest, { recursive: true });
-    for (const src of [defPath, path.join(promptsDir(p), `${name}.md`), path.join(statusDir(p), `${name}.md`), path.join(emblemsDir(p), `${name}.svg`), iconRequestFile(p, name)]) {
+    for (const src of [defPath, path.join(promptsDir(p), `${name}.md`), path.join(statusDir(p), `${name}.md`), path.join(emblemsDir(p), `${name}.svg`), iconRequestFile(p, name), spaceDir(p, name)]) {
       if (fs.existsSync(src)) fs.renameSync(src, path.join(dest, path.basename(path.dirname(src)) + '-' + path.basename(src)));
     }
     if (p.meta) delete p.meta[name];
@@ -703,6 +707,121 @@ function buildFlow(p) {
   };
 }
 
+// ---------- agent workspace: a folder of its own, with an inbox and an outbox ----------
+// This is how a chat-style agent talks to the user and to the board: plain files. A message from the board lands in
+// agent-space/<name>/inbox/ and queues a run request; the agent answers by writing a file in outbox/.
+const spaceDir = (p, name) => path.join(p.root, 'agent-space', name);
+const MSG_FILE = /^[\w.-]+\.md$/;
+function ensureSpace(p, name) {
+  fs.mkdirSync(path.join(spaceDir(p, name), 'inbox'), { recursive: true });
+  fs.mkdirSync(path.join(spaceDir(p, name), 'outbox'), { recursive: true });
+}
+function spaceFiles(p, name, side) {
+  const dir = path.join(spaceDir(p, name), side === 'in' ? 'inbox' : 'outbox');
+  let list = [];
+  try { list = fs.readdirSync(dir).filter(f => MSG_FILE.test(f)); } catch { return []; }
+  const out = [];
+  for (const f of list) { try { out.push({ side, file: f, dir, at: fs.statSync(path.join(dir, f)).mtimeMs }); } catch {} }
+  return out;
+}
+function spaceSummary(p, name) {
+  const ins = spaceFiles(p, name, 'in'), outs = spaceFiles(p, name, 'out');
+  const lastOut = Math.max(0, ...outs.map(m => m.at));
+  return { count: ins.length + outs.length, last: Math.max(0, lastOut, ...ins.map(m => m.at)), unanswered: ins.filter(m => m.at > lastOut).length };
+}
+function readThread(b) {
+  const p = getProject(clean(b.project, 60)), name = clean(b.name, 40);
+  if (!p || !validName(name)) return { error: 'No such agent.' };
+  const msgs = [...spaceFiles(p, name, 'in'), ...spaceFiles(p, name, 'out')].sort((a, c) => a.at - c.at).slice(-30);
+  const items = msgs.map(m => {
+    let raw = ''; try { raw = fs.readFileSync(path.join(m.dir, m.file), 'utf8'); } catch {}
+    const body = raw.includes('\n---\n') ? raw.split('\n---\n').slice(1).join('\n---\n') : raw.replace(/^(?:(?:from|to|at)\s*:.*\n)+/i, '');
+    return { side: m.side, file: m.file, at: m.at, text: body.trim().slice(0, 4000) };
+  });
+  return { ok: true, items };
+}
+function sendMessage(b) {
+  const p = getProject(clean(b.project, 60)), name = clean(b.agent, 40);
+  if (!p || !validName(name) || !fs.existsSync(path.join(agentsDir(p), `${name}.md`))) return { error: 'There is no such agent.' };
+  const text = String(b.text || '').trim().slice(0, 4000);
+  if (text.length < 1) return { error: 'Write a message first.' };
+  const now = new Date(), stamp = now.toISOString().replace(/[-:]/g, '').replace(/\..*/, '');
+  const file = path.join(spaceDir(p, name), 'inbox', `${stamp}-${Math.random().toString(36).slice(2, 6)}-you.md`);
+  try {
+    ensureSpace(p, name);
+    fs.writeFileSync(file, ['from: you', 'at: ' + now.toISOString(), '---', text, ''].join('\n'), { flag: 'wx' });
+  } catch (e) { return { error: `Could not save the message: ${e.code || e.message}` }; }
+  watch(spaceDir(p, name));
+  const rel = `agent-space/${name}`;
+  const r = createRequest({ project: p.id, agent: name, source: 'message', task: `You have a new message from the user. Read every file in ${rel}/inbox/ that is newer than your latest file in ${rel}/outbox/, do what it asks, and write your answer as a new file in ${rel}/outbox/ named <timestamp>-reply.md. Start that file with the line "to: you". Keep the answer short and say what you did.` });
+  broadcast();
+  return { ok: true, queued: !r.error, note: r.error || '' };
+}
+
+// ---------- importing chats and scheduled tasks ----------
+// The server cannot see Claude's chats or scheduled tasks. A Claude session can (/board:import), and posts what it found here.
+const IMPORTS_FILE = path.join(DATA_DIR, 'imports.json');
+let imports = { at: 0, items: [] };
+try { imports = JSON.parse(fs.readFileSync(IMPORTS_FILE, 'utf8')); } catch {}
+const saveImports = () => { try { fs.writeFileSync(IMPORTS_FILE, JSON.stringify(imports, null, 2)); } catch {} };
+function cronToTrigger(cron) {
+  const f = String(cron || '').trim().split(/\s+/);
+  if (f.length !== 5) return null;
+  const [mi, h, dom, mon, dow] = f;
+  if (dom !== '*' || mon !== '*' || dow !== '*') return null;
+  if (/^\d+$/.test(mi) && /^\d+$/.test(h) && +mi < 60 && +h < 24) return { kind: 'daily', at: `${h.padStart(2, '0')}:${mi.padStart(2, '0')}` };
+  if (/^\*\/\d+$/.test(mi) && h === '*' && +mi.slice(2) >= 5) return { kind: 'every', every: +mi.slice(2) };
+  if (mi === '0' && /^\*\/\d+$/.test(h) && +h.slice(2) >= 1) return { kind: 'every', every: +h.slice(2) * 60 };
+  return null;
+}
+function setImports(b) {
+  if (!Array.isArray(b.items)) return { error: 'Expected a list of items.' };
+  const items = [];
+  for (const it of b.items.slice(0, 100)) {
+    const kind = it.kind === 'scheduled' ? 'scheduled' : it.kind === 'session' ? 'session' : '';
+    const rawId = clean(it.id, 80);
+    if (!kind || !/^[\w.:-]{1,80}$/.test(rawId)) continue;
+    const link = clean(it.link, 200);
+    items.push({
+      id: `${kind}:${rawId}`, kind, title: clean(it.title, 120) || rawId, description: clean(it.description, 400),
+      prompt: String(it.prompt || '').trim().slice(0, 3000), cwd: clean(it.cwd, 300), schedule: clean(it.schedule, 80),
+      cron: /^[\d*\/, -]{0,60}$/.test(clean(it.cron, 60)) ? clean(it.cron, 60) : '', lastActivity: Number(it.lastActivity) || 0,
+      link: /^claude:\/\/[\w./:-]{1,180}$/.test(link) ? link : '',
+    });
+  }
+  imports = { at: Date.now(), items };
+  saveImports(); broadcast();
+  return { ok: true, count: items.length };
+}
+function listImports() {
+  const norm = s => path.resolve(String(s || '.')).toLowerCase();
+  return {
+    at: imports.at,
+    items: imports.items.map(it => {
+      const home = it.cwd && projects.find(p => norm(it.cwd) === norm(p.root) || norm(it.cwd).startsWith(norm(p.root) + path.sep));
+      const trig = cronToTrigger(it.cron);
+      return { ...it, project: home ? home.id : '', trigger: trig ? { ...trig, label: triggerLabel(trig) } : null };
+    }),
+  };
+}
+function adoptImport(b) {
+  const it = imports.items.find(x => x.id === clean(b.id, 100));
+  if (!it) return { error: 'That item is no longer in the import list. Run /board:import again.' };
+  const r = createAgent({ ...b, tools: b.tools });
+  if (r.error) return r;
+  const p = getProject(clean(b.project, 60));
+  p.meta[r.name].origin = { kind: it.kind, title: it.title, link: it.link };
+  saveProjects();
+  let trigger = '';
+  const trig = b.schedule === true && cronToTrigger(it.cron);
+  if (trig) {
+    const t = addTrigger({ project: p.id, agent: r.name, ...trig, task: (it.prompt || it.description || it.title).slice(0, 1000) });
+    trigger = t.error || triggerLabel(trig);
+  }
+  imports.items = imports.items.filter(x => x !== it); saveImports(); broadcast();
+  return { ...r, trigger };
+}
+
 function createProject(b) {
   const name = clean(b.name, 40), root = clean(b.root, 400);
   if (name.length < 2) return { error: 'Give the project a name.' };
@@ -731,7 +850,7 @@ function watch(dir, recursive = true) {
   try { fs.watch(dir, { recursive }, () => broadcast()); watched.add(dir); } catch {}
 }
 function watchProject(p) {
-  [statusDir(p), agentsDir(p), requestsDir(p), emblemsDir(p), ...p.outputs.map(o => o.dir)].forEach(d => watch(d));
+  [statusDir(p), agentsDir(p), requestsDir(p), emblemsDir(p), path.join(p.root, 'agent-space'), ...p.outputs.map(o => o.dir)].forEach(d => watch(d));
   (p.files || []).forEach(f => watch(path.dirname(f.file), false));
   watch(p.root, false); // catches output folders being created later
 }
@@ -763,7 +882,7 @@ http.createServer((req, res) => {
     if (!originOk(req)) return json(res, { error: 'Request blocked.' }, 403);
     return readBody(req, body => {
       if (!body) return json(res, { error: 'Bad request.' }, 400);
-      const act = { '/api/agents': createAgent, '/api/agents/update': updateAgent, '/api/agents/remove': removeAgent, '/api/agents/icon': redrawIcon, '/api/triggers': addTrigger, '/api/triggers/remove': removeTrigger, '/api/triggers/toggle': toggleTrigger }[url.pathname];
+      const act = { '/api/agents': createAgent, '/api/agents/update': updateAgent, '/api/agents/remove': removeAgent, '/api/agents/icon': redrawIcon, '/api/triggers': addTrigger, '/api/triggers/remove': removeTrigger, '/api/triggers/toggle': toggleTrigger, '/api/messages': sendMessage, '/api/imports': setImports, '/api/imports/adopt': adoptImport }[url.pathname];
       if (act) { const r = act(body); return json(res, r, r.error ? 400 : 200); }
       if (url.pathname === '/api/projects') { const r = createProject(body); return json(res, r, r.error ? 400 : 200); }
       if (url.pathname === '/api/requests') { const r = createRequest(body); return json(res, r, r.error ? 400 : 200); }
@@ -771,6 +890,11 @@ http.createServer((req, res) => {
     });
   }
 
+  if (url.pathname === '/api/thread') {
+    const r = readThread({ project: url.searchParams.get('project') || '', name: url.searchParams.get('agent') || '' });
+    return json(res, r, r.error ? 404 : 200);
+  }
+  if (url.pathname === '/api/imports') return json(res, listImports());
   if (url.pathname === '/api/connectors') {
     const p = getProject(url.searchParams.get('project') || '');
     return p ? json(res, { servers: readConnectors(p) }) : json(res, { error: 'No such project.' }, 404);

@@ -18,6 +18,9 @@ You are a dedicated agent on the {{project}} project (folder: {{root}}). This fi
 3. Keep your status file up to date (see your agent definition): first action and last action.
 4. Be honest about confidence: separate "verified by running it", "verified by reading it" and "not verified".
 
+## Your folder and messages
+You have a workspace at {{space}}. The user writes to you through `inbox/`; answer by writing a new file in `outbox/` named `<timestamp>-reply.md` whose first line is `to: you`. Read only inbox files that are newer than your latest outbox file. Keep notes you want to remember in your folder.
+
 ## Handing work to another agent
 To give another agent a task, write `agent-missions/<their-name>-<topic>.md`. Make its first line `from: {{name}}`, then a `# title` line and the details. The board draws this as a handoff from you to them, and shows it as stuck if they do not pick it up.
 
